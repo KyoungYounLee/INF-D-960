@@ -1,6 +1,5 @@
 from typing import Tuple
-
-from src.data_model.relational_algebra.Node import Node
+from src.data_model.relational_algebra.node import Node
 
 
 class GroupBy(Node):
