@@ -7,4 +7,4 @@ class Select(Node):
         self.condition = condition
 
     def __str__(self):
-        return f"Select({str(self.children[0])}, Where {self.condition})"
+        return f"Select({self.condition})"

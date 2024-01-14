@@ -20,3 +20,15 @@ class RelationalAlgebraQuery:
 
     def __init__(self, root_operation: Node):
         self.root = root_operation
+
+    def __str__(self):
+        return self._format_node(self.root, level=0)
+
+    def _format_node(self, node, level):
+        node_str = f"{'    ' * level}{node}"
+
+        for child in node.children:
+            node_str += "\n" + self._format_node(child, level + 1)
+
+        return node_str
+
