@@ -6,6 +6,7 @@ from postbound.qal.clauses import Where
 from postbound.qal.parser import parse_query
 from postbound.qal.qal import SqlQuery
 
+from src.data_model.relational_algebra.groupby import GroupBy
 from src.data_model.relational_algebra.join import Join
 from src.data_model.relational_algebra.node import Node
 from src.data_model.relational_algebra.project import Project
@@ -30,15 +31,24 @@ class Parser:
         select_clause = sql_query.select_clause
         from_clause = sql_query.from_clause
         where_clause = sql_query.where_clause
+        groupby_clause = sql_query.groupby_clause
 
-        if any(condition.is_join() for condition in where_clause.predicate.base_predicates()):
-            join_node = self._convert_implicit_join_to_relational_algebra(where_clause)
-            project_node = Project(join_node, select_clause.columns())
+        if where_clause and any(condition.is_join() for condition in where_clause.predicate.base_predicates()):
+            child_node = self._convert_implicit_join_to_relational_algebra(where_clause)
+        elif where_clause:
+            table_references = from_clause.tables()
+            table_node = Table(table_references.pop())
+            child_node = Select(table_node, where_clause.predicate)
         else:
             table_references = from_clause.tables()
             table_node = Table(table_references.pop())
-            select_node = Select(table_node, where_clause.predicate)
-            project_node = Project(select_node, select_clause.columns())
+            child_node = table_node
+
+        if groupby_clause:
+            aggregate_function = ("field_name", "function_name")  # 적절한 집계 함수로 수정 필요
+            child_node = GroupBy(child_node, groupby_clause.group_columns, aggregate_function)
+
+        project_node = Project(child_node, select_clause.columns())
 
         return RelationalAlgebraQuery(project_node)
 
@@ -46,13 +56,6 @@ class Parser:
         # 1) join base table, join table
         # 2) subquery - z.B) join base table in der Form Subquery
         # 3) rekursive Funktion
-
-        # When die Tables mehr als eins sind
-        # table_references = from_clause.tables()
-        # table_nodes = [Table(table_ref.full_name) for table_ref in table_references]
-
-        # JOIN -> Join-Node of Relational Algebra
-        # SELECT -> Project, WHERE -> Select
 
     def _convert_implicit_join_to_relational_algebra(self, where_clause: Where) -> Node:
         abstract_predicate = where_clause.predicate
