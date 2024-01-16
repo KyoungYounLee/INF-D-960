@@ -45,8 +45,7 @@ class Parser:
             child_node = table_node
 
         if groupby_clause:
-            aggregate_function = ("field_name", "function_name")  # 적절한 집계 함수로 수정 필요
-            child_node = GroupBy(child_node, groupby_clause.group_columns, aggregate_function)
+            child_node = GroupBy(child_node, groupby_clause.group_columns)
 
         project_node = Project(child_node, select_clause.columns())
 
