@@ -9,4 +9,4 @@ class Join(Node):
 
     def __str__(self):
         left, right = self.children
-        return f"{self.join_type.capitalize()} Join({left}, {right}, On {self.condition})"
+        return f"{self.join_type.capitalize()} Join(On {self.condition})"

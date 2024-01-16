@@ -71,13 +71,12 @@ class Parser:
         for join_node in join_nodes:
             new_children = []
             for child in join_node.children:
-                filter_condition = next((cond for cond in filter_conditions if child in cond.tables()), None)
+                filter_condition = next((cond for cond in filter_conditions if child.table in cond.tables()), None)
                 if filter_condition:
                     new_children.append(Select(child, filter_condition))
                 else:
                     new_children.append(child)
             join_node.children = new_children
-
         return self._join_nodes_to_one_relational_algebra(join_nodes)
 
     @staticmethod
