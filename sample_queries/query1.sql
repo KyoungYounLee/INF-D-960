@@ -37,3 +37,13 @@ JOIN (
     group by d.student_id
 ) as subquery ON subquery.student_id = oq.student_id
 where oq.grade = m;
+
+--query1. Join-form ohne CTE
+SELECT s.name, e.course
+FROM students s
+JOIN exams e ON s.id = e.sid
+JOIN (
+    SELECT min(grade) AS m, sid AS student_id
+    FROM exams
+    GROUP BY sid
+) AS min_grades ON s.id = min_grades.student_id AND e.grade = min_grades.m;

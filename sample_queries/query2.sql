@@ -108,11 +108,11 @@ select s.name, e.course
 from   students s, exams e
 where  s.id=e.sid and
    (s.major = 'CS' or s.major = 'Games Eng') and
-   e.grade>=(select avg(e2.grade)+1 --one grade worse
-           from exams e2          --than the average grade
-           where s.id=e2.sid or   --of exams taken by
-                 (e2.curriculum=s.major and --him/her or taken
-                 s.year>e2.date));         --by elder peers
+   e.grade>=(select avg(e2.grade)+1
+           from exams e2
+           where s.id=e2.sid or
+                 (e2.curriculum=s.major and
+                 s.year>e2.date));
 
 --Query 2, Optimierte Form nach Neumann
 WITH D AS (
@@ -145,3 +145,30 @@ FROM students s, exams e, (
 ) AS d
 WHERE s.id = e.sid AND (s.major = 'CS' OR s.major = 'Games Eng') AND
       e.grade > m+1 AND (d.id = s.id and d.year = s.year and d.major = s.major);
+
+--Query 2. Formatierung
+WITH outerquery AS (
+   SELECT DISTINCT s.name, s.id, s.year, s.major, e.course, e.grade
+   FROM students s, exams e
+   WHERE s.id = e.sid and (s.major = 'CS' OR s.major = 'Games Eng')
+)
+SELECT oq.name, oq.course
+FROM outerquery oq, (
+   SELECT AVG(e2.grade) m, outerquery.id, outerquery.year, outerquery.major
+       FROM outerquery, exams e2
+   WHERE outerquery.id = e2.sid or (outerquery.year > e2.date and e2.curriculum = outerquery.major)
+   GROUP BY outerquery.id, outerquery.major, outerquery.year
+) AS subquery
+WHERE oq.grade > m+1 AND (oq.id = subquery.id and oq.year = subquery.year and oq.major = subquery.major);
+
+--Query 2. Join-Form
+SELECT s.name, e.course
+FROM students s
+JOIN exams e ON s.id = e.sid
+JOIN (
+    SELECT AVG(e2.grade) + 1 AS m, e2.sid, s2.year, s2.major
+    FROM students s2
+    JOIN exams e2 ON s2.id = e2.sid OR (s2.major = e2.curriculum AND s2.year > e2.date)
+    GROUP BY e2.sid, s2.year, s2.major
+) AS avg_grades ON s.id = avg_grades.sid AND s.year = avg_grades.year AND s.major = avg_grades.major
+WHERE e.grade >= avg_grades.m AND (s.major = 'CS' OR s.major = 'Games Eng');
