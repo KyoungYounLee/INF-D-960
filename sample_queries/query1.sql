@@ -47,3 +47,22 @@ JOIN (
     FROM exams
     GROUP BY sid
 ) AS min_grades ON s.id = min_grades.student_id AND e.grade = min_grades.m;
+
+--query1. CTE ohne Duplikate
+WITH outerquery AS (
+    SELECT s.id, s.name, s.major, s.year, e.id AS exam_id, e.grade, e.course, e.curriculum, e.date
+    FROM students s
+    JOIN exams e ON s.id = e.sid
+),
+dup_elim_outerquery AS (
+    select distinct id
+    from outerquery
+)
+SELECT oq.name, oq.course
+FROM outerquery oq
+JOIN (
+    select min(e2.grade) m, d.id
+    from exams e2 join dup_elim_outerquery d on d.id = e2.sid
+    group by d.id
+) as subquery ON subquery.id = oq.id
+where oq.grade = m;
