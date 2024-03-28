@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional
 
 from postbound.qal.base import ColumnReference, TableReference
-from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection
+from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy
 
 
 class Optimizer:
@@ -21,6 +21,10 @@ class Optimizer:
             return relalg
 
         t1, t2 = self._derive_sub_and_outer_queries(local_rel_nodes[0])
+
+        all_dependent_columns = None
+        if t1:
+            all_dependent_columns = self._find_all_dependent_columns(t2, t1)
 
         return t1, t2
 
@@ -58,11 +62,20 @@ class Optimizer:
                     break
         return t1, t2
 
-    def _derive_domain_D(self):
+    def _insert_domain_D(self, t1: RelNode, t2: RelNode):
+        all_dependent_columns = self._find_all_dependent_columns(t2, t1)
+
+        def find_t2_node_in_t1(t1: RelNode, t2: RelNode):
+            for child in t1.children():
+                pass
+
         pass
 
-    def _find_all_dependent_columns(self, node: RelNode, tables: List[TableReference]) -> List[ColumnReference]:
+    def _find_all_dependent_columns(self, node: RelNode, outer_query: RelNode) -> List[ColumnReference]:
+        if node == outer_query:
+            return []
 
+        tables = outer_query.tables()
         dependent_columns = []
 
         if isinstance(node, Projection):
@@ -75,12 +88,13 @@ class Optimizer:
             dependent_columns += self._find_all_dependent_selection_columns(node, tables)
 
         for child_node in node.children():
-            dependent_columns += self._find_all_dependent_columns(child_node, tables)
+            dependent_columns += self._find_all_dependent_columns(child_node, outer_query)
 
+        dependent_columns = list(set(dependent_columns))
         return dependent_columns
 
     @staticmethod
-    def _find_all_dependent_projection_columns(project: Projection, tables: List[TableReference]) \
+    def _find_all_dependent_projection_columns(project: Projection, tables: frozenset[TableReference]) \
             -> List[ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
@@ -93,7 +107,7 @@ class Optimizer:
         return columns
 
     @staticmethod
-    def _find_all_dependent_join_columns(join: ThetaJoin, tables: List[TableReference]) -> List[ColumnReference]:
+    def _find_all_dependent_join_columns(join: ThetaJoin, tables: frozenset[TableReference]) -> List[ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
 
@@ -104,7 +118,8 @@ class Optimizer:
         return columns
 
     @staticmethod
-    def _find_all_dependent_groupby_columns(groupby: GroupBy, tables: List[TableReference]) -> List[ColumnReference]:
+    def _find_all_dependent_groupby_columns(groupby: GroupBy, tables: frozenset[TableReference]) -> List[
+        ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
 
@@ -116,7 +131,7 @@ class Optimizer:
         return columns
 
     @staticmethod
-    def _find_all_dependent_selection_columns(selection: Selection, tables: List[TableReference]) -> List[
+    def _find_all_dependent_selection_columns(selection: Selection, tables: frozenset[TableReference]) -> List[
         ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
