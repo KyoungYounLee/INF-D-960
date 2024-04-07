@@ -8,54 +8,59 @@ from postbound.qal.relalg import RelNode, VisitorResult, RelNodeVisitor
 
 
 class DependentJoin(RelNode):
-    def __init__(self, *, base_node: RelNode, dependent_node: RelNode,
+    def __init__(self, base_node: RelNode, dependent_node: RelNode, *,
                  predicate: Optional[preds.AbstractPredicate] = None,
                  parent_node: Optional[RelNode] = None) -> None:
         super().__init__(parent_node.mutate() if parent_node is not None else None)
-        self._base_node = base_node
-        self._dependent_node = dependent_node
+        self._left_child = base_node
+        self._right_child = dependent_node
         self._predicate = predicate
-        self._hash_val = hash((self._base_node, self._dependent_node, self._predicate))
+        self._hash_val = hash((self._left_child, self._right_child, self._predicate))
         self._maintain_child_links()
 
     @property
     def base_node(self) -> RelNode:
-        return self._base_node
+        return self._left_child
 
     @property
     def dependent_node(self) -> RelNode:
-        return self._dependent_node
+        return self._right_child
 
     @property
     def predicate(self) -> Optional[preds.AbstractPredicate]:
         return self._predicate
 
     def children(self) -> Sequence[RelNode]:
-        return [self._base_node, self._dependent_node]
+        return [self._left_child, self._right_child]
 
     def accept_visitor(self, visitor: RelNodeVisitor[VisitorResult]) -> VisitorResult:
         return visitor.visit_theta_join(self)
 
-    def mutate(self, *, left_child: Optional[RelNode] = None, right_child: Optional[RelNode] = None,
+    def mutate(self, left_child: Optional[RelNode] = None, right_child: Optional[RelNode] = None, *,
                predicate: Optional[preds.AbstractPredicate] = None,
                parent: Optional[RelNode] = None, as_root: bool = False) -> DependentJoin:
 
-        base_node = left_child if left_child is not None else self._base_node
-        dependent_node = right_child if right_child is not None else self._dependent_node
+        if left_child is not None:
+            self._left_child = left_child
+            self._left_child.mutate(parent=self)
+        if right_child is not None:
+            self._right_child = right_child
+            self._right_child.mutate(parent=self)
+
+        if not as_root and parent is not None:
+            self._parent = parent
+
         if as_root:
-            parent = None
-        else:
-            # mutation of the parent is handled during the __init__ method of the current mutated node
-            parent = parent if parent is not None else self._parent
-        return DependentJoin(base_node=base_node, dependent_node=dependent_node, predicate=predicate,
-                             parent_node=parent)
+            self._parent = None
+
+        return self
 
     def __hash__(self) -> int:
         return self._hash_val
 
     def __eq__(self, other: object) -> bool:
         return (isinstance(other, type(self))
-                and self._base_node == other._base_node and self._dependent_node == other._dependent_node
+                and self._left_child == other._left_child and self._right_child == other._right_child
                 and self._predicate == other._predicate)
 
     def __str__(self) -> str:
