@@ -1,7 +1,8 @@
 from typing import List, Tuple, Optional
 
 from postbound.qal.base import ColumnReference, TableReference
-from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct
+from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
+    Relation
 
 from src.optimizer.dependent_join import DependentJoin
 
@@ -25,10 +26,10 @@ class Optimizer:
             return relalg
 
         # 2. Subquery (T2), Outerquery (T1) berechnen
-        t1, t2, root = self._derive_outer_and_sub_with_root(local_rel_nodes[0])
+        t1, t2 = self._derive_outer_and_sub_with_root(local_rel_nodes[0])
 
         # 3. in die Form Dependent-join konvertieren
-        dependent_join = self._convert_to_dependent_join(t1, t2)
+        # dependent_join = self._convert_to_dependent_join(t1, t2)
 
         # 4. D berechnen
 
@@ -60,31 +61,25 @@ class Optimizer:
 
     @staticmethod
     def _derive_outer_and_sub_with_root(subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
-        t2 = subquery.input_node.mutate(as_root=True)
+        t2 = subquery.input_node.mutate()
 
         # CrossProduct
         parent_node = subquery.parent_node
         t1 = None
-        root = None
 
         if parent_node:
             for child in parent_node.children():
                 if child != t2:
-                    t1 = child.mutate(as_root=True)
+                    t1 = child.mutate()
                     break
 
-        root = parent_node.mutate(parent_node.left_child, None)
-
-        return t1, t2, root
+        return t1, t2
 
     def _update_node_and_all_children_nodes(self, node: RelNode, updated_nodes_set=None) -> Optional[RelNode]:
         if updated_nodes_set is None:
-            updated_nodes_set = []
+            updated_nodes_set = set()
 
-        if node is None:
-            return None
-
-        if node in updated_nodes_set:
+        if node in updated_nodes_set or isinstance(node, Relation):
             return node
 
         if isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
@@ -95,11 +90,14 @@ class Optimizer:
             updated_child = self._update_node_and_all_children_nodes(node.input_node)
             return node.mutate(input_node=updated_child)
 
-    def _update_relalg_structure(self, node: RelNode, updated_nodes_set, **kwargs) -> RelNode:
+    def _update_relalg_structure(self, node: RelNode, updated_nodes_set=None, **kwargs) -> RelNode:
+        if updated_nodes_set is None:
+            updated_nodes_set = set()
+
         updated_node = self._update_node_and_all_children_nodes(node.mutate(**kwargs), updated_nodes_set)
         updated_nodes_set.add(updated_node)
 
-        if updated_node.root():
+        if updated_node.parent_node is None:
             return updated_node
 
         parent_node = updated_node.parent_node
