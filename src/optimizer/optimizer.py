@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional
 
 from postbound.qal.base import ColumnReference, TableReference
-from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy
+from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct
 
 from src.optimizer.dependent_join import DependentJoin
 
@@ -25,7 +25,7 @@ class Optimizer:
             return relalg
 
         # 2. Subquery (T2), Outerquery (T1) berechnen
-        t1, t2 = self._derive_sub_and_outer_queries(local_rel_nodes[0])
+        t1, t2, root = self._derive_outer_and_sub_with_root(local_rel_nodes[0])
 
         # 3. in die Form Dependent-join konvertieren
         dependent_join = self._convert_to_dependent_join(t1, t2)
@@ -59,30 +59,49 @@ class Optimizer:
         return subqueries
 
     @staticmethod
-    def _derive_sub_and_outer_queries(subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
-        t2 = subquery.input_node
+    def _derive_outer_and_sub_with_root(subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
+        t2 = subquery.input_node.mutate(as_root=True)
 
+        # CrossProduct
         parent_node = subquery.parent_node
         t1 = None
+        root = None
 
         if parent_node:
             for child in parent_node.children():
                 if child != t2:
-                    t1 = child
-                    # t1 = t1.mutate(parent_node=parent_node)
+                    t1 = child.mutate(as_root=True)
                     break
-        return t1, t2
 
-    def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
-        dependent_join = DependentJoin(base_node=t1, dependent_node=t2)
-        dependent_join_parent_node = t2.parent_node.parent_node.parent_node.mutate(input_node=dependent_join)
+        root = parent_node.mutate(parent_node.left_child, None)
 
-        # Todo: Eltern-Knoten mit dem Join besser aktualisieren
-        t1 = t1.mutate(parent=dependent_join)
-        t2 = t2.mutate(parent=dependent_join)
-        dependent_join = dependent_join.mutate(left_child=t1, right_child=t2)
+        return t1, t2, root
 
-        return dependent_join_parent_node
+    # TODO: Das sollte den ganzen Baum aktualisieren.
+    def _update_parent_nodes_upward(self, child: RelNode, new_child: RelNode) -> RelNode:
+        parent_node = child.parent_node
+        # Type 정리해서 다 넣기
+        if isinstance(parent_node, ThetaJoin or CrossProduct or DependentJoin):
+            if parent_node.left_input == child:
+                parent_node = parent_node.mutate(left_child=new_child)
+            elif parent_node.right_input == child:
+                parent_node = parent_node.mutate(right_child=new_child)
+        elif isinstance(parent_node, Projection or Selection or GroupBy):
+            if parent_node.input_node == child:
+                parent_node = parent_node.mutate(input_node=new_child)
+
+        return parent_node if parent_node.root() is True else self._update_parent_nodes_upward(child.parent_node,
+                                                                                               parent_node)
+
+    @staticmethod
+    def _convert_to_dependent_join(t1: RelNode, t2: RelNode) -> RelNode:
+        dependent_join = DependentJoin(t1, t2)
+        updated_dependent_join = dependent_join.mutate()
+
+        dependent_join_parent_node = t2.parent_node.parent_node.parent_node.mutate(input_node=updated_dependent_join)
+
+        new_root = dependent_join_parent_node.parent_node.mutate(input_node=dependent_join_parent_node, as_root=True)
+        return new_root
 
     def _insert_domain_D(self, dependent_join: DependentJoin):
         all_dependent_columns = self._find_all_dependent_columns(dependent_join.base_node,
