@@ -77,21 +77,39 @@ class Optimizer:
 
         return t1, t2, root
 
-    # TODO: Das sollte den ganzen Baum aktualisieren.
-    def _update_parent_nodes_upward(self, child: RelNode, new_child: RelNode) -> RelNode:
-        parent_node = child.parent_node
-        # Type 정리해서 다 넣기
-        if isinstance(parent_node, ThetaJoin or CrossProduct or DependentJoin):
-            if parent_node.left_input == child:
-                parent_node = parent_node.mutate(left_child=new_child)
-            elif parent_node.right_input == child:
-                parent_node = parent_node.mutate(right_child=new_child)
-        elif isinstance(parent_node, Projection or Selection or GroupBy):
-            if parent_node.input_node == child:
-                parent_node = parent_node.mutate(input_node=new_child)
+    def _update_node_and_all_children_nodes(self, node: RelNode, updated_nodes_set=None) -> Optional[RelNode]:
+        if updated_nodes_set is None:
+            updated_nodes_set = []
 
-        return parent_node if parent_node.root() is True else self._update_parent_nodes_upward(child.parent_node,
-                                                                                               parent_node)
+        if node is None:
+            return None
+
+        if node in updated_nodes_set:
+            return node
+
+        if isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
+            updated_link_child = self._update_node_and_all_children_nodes(node.left_input)
+            updated_right_child = self._update_node_and_all_children_nodes(node.right_input)
+            return node.mutate(left_child=updated_link_child, right_child=updated_right_child)
+        else:
+            updated_child = self._update_node_and_all_children_nodes(node.input_node)
+            return node.mutate(input_node=updated_child)
+
+    def _update_relalg_structure(self, node: RelNode, updated_nodes_set, **kwargs) -> RelNode:
+        updated_node = self._update_node_and_all_children_nodes(node.mutate(**kwargs), updated_nodes_set)
+        updated_nodes_set.add(updated_node)
+
+        if updated_node.root():
+            return updated_node
+
+        parent_node = updated_node.parent_node
+        if isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
+            if parent_node.left_input == node:
+                return self._update_relalg_structure(parent_node.mutate(left_child=updated_node), updated_nodes_set)
+            else:
+                return self._update_relalg_structure(parent_node.mutate(right_child=updated_node), updated_nodes_set)
+        else:
+            return self._update_relalg_structure(parent_node.mutate(input_node=updated_node), updated_nodes_set)
 
     @staticmethod
     def _convert_to_dependent_join(t1: RelNode, t2: RelNode) -> RelNode:

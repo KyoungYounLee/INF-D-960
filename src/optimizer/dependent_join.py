@@ -19,11 +19,11 @@ class DependentJoin(RelNode):
         self._maintain_child_links()
 
     @property
-    def base_node(self) -> RelNode:
+    def left_input(self) -> RelNode:
         return self._left_input
 
     @property
-    def dependent_node(self) -> RelNode:
+    def right_input(self) -> RelNode:
         return self._right_input
 
     @property
