@@ -14,7 +14,7 @@ class Optimizer:
     def optimize_unnesting(self, relalg: RelNode):
         """
         1. Prüfen, ob die Abfrage einen abhängigen Join hat
-        2. Subquery (T2), Outerquery (T1) berechnen
+        2. Outerquery (T1), Subquery (T2) berechnen
         3. in die Form Dependent-join konvertieren
         4. D berechnen
         5. Push-dpwn
@@ -25,19 +25,16 @@ class Optimizer:
         if len(local_rel_nodes) == 0:
             return relalg
 
-        # 2. Subquery (T2), Outerquery (T1) berechnen
-        t1, t2 = self._derive_outer_and_sub_with_root(local_rel_nodes[0])
+        # 2. Outerquery (T1), Subquery (T2) berechnen
+        t1, t2 = self._derive_outer_and_sub_query(local_rel_nodes[0])
 
         # 3. in die Form Dependent-join konvertieren
-        # dependent_join = self._convert_to_dependent_join(t1, t2)
+        dependent_join = self._convert_to_dependent_join(t1, t2)
 
         # 4. D berechnen
+        d = self._derive_domain_node(t1, t2)
 
-        all_dependent_columns = None
-        if t1:
-            all_dependent_columns = self._find_all_dependent_columns(t2, t1)
-
-        return t1, t2
+        return t1, t2, dependent_join, d
 
     @staticmethod
     def _find_dependent_subquery_node(relalg: RelNode) -> List[SubqueryScan]:
@@ -59,9 +56,8 @@ class Optimizer:
         find_dependent_subqueries(relalg)
         return subqueries
 
-    @staticmethod
-    def _derive_outer_and_sub_with_root(subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
-        t2 = subquery.input_node.mutate()
+    def _derive_outer_and_sub_query(self, subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
+        t2 = self._update_relalg_structure(subquery.input_node.mutate(as_root=True))
 
         # CrossProduct
         parent_node = subquery.parent_node
@@ -70,7 +66,7 @@ class Optimizer:
         if parent_node:
             for child in parent_node.children():
                 if child != t2:
-                    t1 = child.mutate()
+                    t1 = self._update_relalg_structure(child.mutate(as_root=True))
                     break
 
         return t1, t2
@@ -109,15 +105,17 @@ class Optimizer:
         else:
             return self._update_relalg_structure(parent_node.mutate(input_node=updated_node), updated_nodes_set)
 
-    @staticmethod
-    def _convert_to_dependent_join(t1: RelNode, t2: RelNode) -> RelNode:
+    def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
         dependent_join = DependentJoin(t1, t2)
-        updated_dependent_join = dependent_join.mutate()
+        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate())
+        return updated_dependent_join
 
-        dependent_join_parent_node = t2.parent_node.parent_node.parent_node.mutate(input_node=updated_dependent_join)
+    def _derive_domain_node(self, t1: RelNode, t2: RelNode) -> Optional[RelNode]:
+        domain = None
+        all_dependent_columns = self._find_all_dependent_columns(t2, t1)
 
-        new_root = dependent_join_parent_node.parent_node.mutate(input_node=dependent_join_parent_node, as_root=True)
-        return new_root
+        domain = Projection(t1, all_dependent_columns)
+        return self._update_relalg_structure(domain.mutate())
 
     def _insert_domain_D(self, dependent_join: DependentJoin):
         all_dependent_columns = self._find_all_dependent_columns(dependent_join.base_node,
