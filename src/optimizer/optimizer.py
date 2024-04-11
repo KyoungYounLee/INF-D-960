@@ -156,7 +156,6 @@ class Optimizer:
         join_predicates = []
 
         tab_d = TableReference("d")
-        print(all_dependent_columns)
 
         for column in all_dependent_columns:
             column_d = ColumnReference(column.name, tab_d)
