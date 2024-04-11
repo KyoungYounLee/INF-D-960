@@ -60,6 +60,9 @@ class Optimizer:
         return subqueries
 
     def _derive_outer_and_sub_query(self, subquery: SubqueryScan) -> Tuple[Optional[RelNode], RelNode]:
+        """
+        Derives outer query (T1) and subquery (T2) from the given subquery node.
+        """
         t2 = self._update_relalg_structure(subquery.input_node.mutate(as_root=True))
 
         # CrossProduct
@@ -75,6 +78,9 @@ class Optimizer:
         return t1, t2
 
     def _update_node_and_all_children_nodes(self, node: RelNode, updated_nodes_set=None) -> Optional[RelNode]:
+        """
+        Recursively updates the given node and all its child nodes.
+        """
         if updated_nodes_set is None:
             updated_nodes_set = set()
 
@@ -90,6 +96,18 @@ class Optimizer:
             return node.mutate(input_node=updated_child)
 
     def _update_relalg_structure(self, node: RelNode, updated_nodes_set=None, **kwargs) -> RelNode:
+        """
+        Recursively updates the entire relational algebra structure beginning from the specified node.
+
+        This method first updates the given node along with all its child nodes recursively. Once the children are updated,
+        it proceeds to update the parent node, thereby ensuring that modifications are propagated throughout the entire tree structure.
+        The process is repeated until the root of the tree is reached and updated, effectively updating the whole relational algebra structure.
+
+        Parameters:
+        - node: The starting node from which updates are to be propagated.
+        - updated_nodes_set: A set used to keep track of nodes that have already been updated to prevent redundant updates.
+        - **kwargs: Additional arguments that may be required for updating nodes, such as modifying specific attributes of the nodes.
+        """
         if updated_nodes_set is None:
             updated_nodes_set = set()
 
@@ -102,11 +120,11 @@ class Optimizer:
         parent_node = updated_node.parent_node
         if isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if parent_node.left_input == node:
-                return self._update_relalg_structure(parent_node.mutate(left_child=updated_node), updated_nodes_set)
+                return self._update_relalg_structure(parent_node, updated_nodes_set, left_child=updated_node)
             else:
-                return self._update_relalg_structure(parent_node.mutate(right_child=updated_node), updated_nodes_set)
+                return self._update_relalg_structure(parent_node, updated_nodes_set, right_child=updated_node)
         else:
-            return self._update_relalg_structure(parent_node.mutate(input_node=updated_node), updated_nodes_set)
+            return self._update_relalg_structure(parent_node, updated_nodes_set, input_node=updated_node)
 
     def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
 
@@ -171,11 +189,11 @@ class Optimizer:
 
         return self._update_relalg_structure(root.mutate())
 
-    def _insert_domain_node(self, t1: RelNode, t2: RelNode, d: Projection) -> RelNode:
-
-        return t1
-
     def _find_all_dependent_columns(self, base_node: RelNode, dependent_node: RelNode) -> List[ColumnReference]:
+        """
+        Finds all columns that are dependent between the given base node and dependent node.
+        """
+
         if dependent_node == base_node:
             return []
 
