@@ -1,6 +1,8 @@
 from typing import List, Tuple, Optional
 
 from postbound.qal.base import ColumnReference, TableReference
+from postbound.qal.expressions import LogicalSqlOperators
+from postbound.qal.predicates import as_predicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
     Relation
 
@@ -27,12 +29,13 @@ class Optimizer:
 
         # 2. Outerquery (T1), Subquery (T2) berechnen
         t1, t2 = self._derive_outer_and_sub_query(local_rel_nodes[0])
+        all_dependent_columns = self._find_all_dependent_columns(t1, t2)
 
         # 3. in die Form Dependent-join konvertieren
         dependent_join = self._convert_to_dependent_join(t1, t2)
 
         # 4. D berechnen
-        d = self._derive_domain_node(t1, t2)
+        d = self._derive_domain_node(dependent_join, all_dependent_columns)
 
         return t1, t2, dependent_join, d
 
@@ -106,26 +109,72 @@ class Optimizer:
             return self._update_relalg_structure(parent_node.mutate(input_node=updated_node), updated_nodes_set)
 
     def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
-        dependent_join = DependentJoin(t1, t2)
+
+        updated_t2 = None
+
+        def find_and_remove_t1_in_t2(node: RelNode):
+            nonlocal updated_t2
+            if isinstance(node, Relation):
+                return False
+            children = node.children()
+            if len(node.children()) == 0:
+                return False
+
+            if t1 in children and isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
+                tail_node = node.right_input if node.left_input == t1 else node.left_input
+                if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
+                    if node.parent_node.left_input == node:
+                        updated_t2 = self._update_relalg_structure(
+                            node.parent_node.mutate(left_child=tail_node))
+                    else:
+                        updated_t2 = self._update_relalg_structure(
+                            node.parent_node.mutate(right_child=tail_node))
+                else:
+                    updated_t2 = self._update_relalg_structure(
+                        node.parent_node.mutate(input_node=tail_node))
+                return True
+
+            for child in children:
+                if find_and_remove_t1_in_t2(child):
+                    return True
+
+            return False
+
+        find_and_remove_t1_in_t2(t2)
+
+        dependent_join = DependentJoin(t1, updated_t2)
         updated_dependent_join = self._update_relalg_structure(dependent_join.mutate())
         return updated_dependent_join
 
-    def _derive_domain_node(self, t1: RelNode, t2: RelNode) -> Optional[RelNode]:
+    def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
+            Optional[RelNode]:
         domain = None
-        all_dependent_columns = self._find_all_dependent_columns(t2, t1)
+        t1 = dependent_join.left_input
+        t2 = dependent_join.right_input
 
-        domain = Projection(t1, all_dependent_columns)
-        return self._update_relalg_structure(domain.mutate())
+        d_predicates = []
+        join_predicates = []
 
-    def _insert_domain_D(self, dependent_join: DependentJoin):
-        all_dependent_columns = self._find_all_dependent_columns(dependent_join.base_node,
-                                                                 dependent_join.dependent_node)
+        tab_d = TableReference("d")
+        print(all_dependent_columns)
 
-        def find_t2_node_in_t1(t1: RelNode, t2: RelNode):
-            for child in t1.children():
-                pass
+        for column in all_dependent_columns:
+            column_d = ColumnReference(column.name, tab_d)
+            d_predicate = as_predicate(column_d, LogicalSqlOperators.NotEqual, column)
+            join_predicate = as_predicate(column_d, LogicalSqlOperators.Equal, column)
 
-        pass
+            d_predicates.append(d_predicate)
+            join_predicates.append(join_predicate)
+
+        domain = Projection(t1, d_predicates)
+        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate(left_child=domain))
+        root = ThetaJoin(t1, updated_dependent_join, join_predicates[0])
+
+        return self._update_relalg_structure(root.mutate())
+
+    def _insert_domain_node(self, t1: RelNode, t2: RelNode, d: Projection) -> RelNode:
+
+        return t1
 
     def _find_all_dependent_columns(self, base_node: RelNode, dependent_node: RelNode) -> List[ColumnReference]:
         if dependent_node == base_node:
