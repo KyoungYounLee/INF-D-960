@@ -2,7 +2,7 @@ from typing import List, Tuple, Optional
 
 from postbound.qal.base import ColumnReference, TableReference
 from postbound.qal.expressions import LogicalSqlOperators
-from postbound.qal.predicates import as_predicate
+from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
     Relation
 
@@ -185,7 +185,9 @@ class Optimizer:
 
         domain = Projection(t1, d_predicates)
         updated_dependent_join = self._update_relalg_structure(dependent_join.mutate(left_child=domain))
-        root = ThetaJoin(t1, updated_dependent_join, join_predicates[0])
+
+        compound_join_predicates = CompoundPredicate.create_and(join_predicates)
+        root = ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
 
         return self._update_relalg_structure(root.mutate())
 
