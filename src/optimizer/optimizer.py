@@ -4,7 +4,7 @@ from postbound.qal.base import ColumnReference, TableReference
 from postbound.qal.expressions import LogicalSqlOperators
 from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
-    Relation
+    Relation, Rename
 
 from src.optimizer.dependent_join import DependentJoin
 
@@ -166,25 +166,26 @@ class Optimizer:
 
     def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
             Optional[RelNode]:
-        domain = None
         t1 = dependent_join.left_input
-        t2 = dependent_join.right_input
 
         d_predicates = []
         join_predicates = []
+        predicates_dict = {}
 
-        tab_d = TableReference("d")
+        tab_d = TableReference("domain", "d")
 
         for column in all_dependent_columns:
             column_d = ColumnReference(column.name, tab_d)
-            d_predicate = as_predicate(column_d, LogicalSqlOperators.NotEqual, column)
             join_predicate = as_predicate(column_d, LogicalSqlOperators.Equal, column)
 
-            d_predicates.append(d_predicate)
+            # predicates_dict[column] = column_d
+            d_predicates.append(column_d)
             join_predicates.append(join_predicate)
 
-        domain = Projection(t1, d_predicates)
-        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate(left_child=domain))
+        rename = Rename(t1, predicates_dict, parent_node=None)
+        domain = Projection(rename, d_predicates)
+        updated_domain = self._update_relalg_structure(domain)
+        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate(left_child=updated_domain))
 
         compound_join_predicates = CompoundPredicate.create_and(join_predicates)
         root = ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
