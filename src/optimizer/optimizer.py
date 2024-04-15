@@ -4,7 +4,7 @@ from postbound.qal.base import ColumnReference, TableReference
 from postbound.qal.expressions import LogicalSqlOperators
 from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
-    Relation, Rename
+    Relation, Rename, SemiJoin, AntiJoin
 
 from src.optimizer.dependent_join import DependentJoin
 
@@ -91,6 +91,10 @@ class Optimizer:
             updated_link_child = self._update_node_and_all_children_nodes(node.left_input)
             updated_right_child = self._update_node_and_all_children_nodes(node.right_input)
             return node.mutate(left_child=updated_link_child, right_child=updated_right_child)
+        elif isinstance(node, (SemiJoin, AntiJoin)):
+            updated_input_node = self._update_node_and_all_children_nodes(node.input_node)
+            updated_subquery_node = self._update_node_and_all_children_nodes(node.subquery_node)
+            return node.mutate(input_node=updated_input_node, subquery_node=updated_subquery_node)
         else:
             updated_child = self._update_node_and_all_children_nodes(node.input_node)
             return node.mutate(input_node=updated_child)
@@ -123,6 +127,11 @@ class Optimizer:
                 return self._update_relalg_structure(parent_node, updated_nodes_set, left_child=updated_node)
             else:
                 return self._update_relalg_structure(parent_node, updated_nodes_set, right_child=updated_node)
+        elif isinstance(parent_node, (AntiJoin, SemiJoin)):
+            if parent_node.input_node == node:
+                return self._update_relalg_structure(parent_node, updated_nodes_set, input_node=updated_node)
+            else:
+                return self._update_relalg_structure(parent_node, updated_nodes_set, subquery_node=updated_node)
         else:
             return self._update_relalg_structure(parent_node, updated_nodes_set, input_node=updated_node)
 
@@ -147,6 +156,13 @@ class Optimizer:
                     else:
                         updated_t2 = self._update_relalg_structure(
                             node.parent_node.mutate(right_child=tail_node))
+                elif isinstance(node.parent_node, (SemiJoin, AntiJoin)):
+                    if node.parent_node.input_node == node:
+                        updated_t2 = self._update_relalg_structure(
+                            node.parent_node.mutate(input_node=tail_node))
+                    else:
+                        updated_t2 = self._update_relalg_structure(
+                            node.parent_node.mutate(subquery_node=tail_node))
                 else:
                     updated_t2 = self._update_relalg_structure(
                         node.parent_node.mutate(input_node=tail_node))
