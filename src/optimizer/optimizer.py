@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from postbound.qal.base import ColumnReference, TableReference
 from postbound.qal.expressions import LogicalSqlOperators
@@ -183,8 +183,8 @@ class Optimizer:
     def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
             Optional[RelNode]:
         t1 = dependent_join.left_input
+        t2 = dependent_join.right_input
 
-        d_predicates = []
         join_predicates = []
         predicates_dict = {}
 
@@ -194,19 +194,64 @@ class Optimizer:
             column_d = ColumnReference(column.name, tab_d)
             join_predicate = as_predicate(column_d, LogicalSqlOperators.Equal, column)
 
-            # predicates_dict[column] = column_d
-            d_predicates.append(column_d)
+            predicates_dict[column] = column_d
             join_predicates.append(join_predicate)
 
-        rename = Rename(t1, predicates_dict, parent_node=None)
-        domain = Projection(rename, d_predicates)
+        # Domain-node
+        rename = Rename(t1, {}, parent_node=None)
+        domain = Projection(rename, predicates_dict.values())
         updated_domain = self._update_relalg_structure(domain)
-        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate(left_child=updated_domain))
 
+        # free variables of t2 (subquery) update to match the domain node
+        updated_t2 = self._update_column_name(t2, predicates_dict)
+
+        updated_dependent_join = self._update_relalg_structure(dependent_join, left_child=updated_domain,
+                                                               right_child=updated_t2)
         compound_join_predicates = CompoundPredicate.create_and(join_predicates)
         root = ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
 
         return self._update_relalg_structure(root.mutate())
+
+    def _update_column_name(self, node: RelNode, column_mapping: Dict[ColumnReference, ColumnReference]) -> RelNode:
+        if isinstance(node, Relation):
+            return node
+        updated_node = node
+        new_columns = []
+
+        if isinstance(node, (GroupBy, Projection)):
+            node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
+
+            for sql_expr in node_columns:
+                for column in sql_expr.itercolumns():
+                    if column in column_mapping.keys():
+                        new_columns.append(column_mapping[column])
+                    else:
+                        new_columns.append(column)
+
+            updated_node = updated_node.mutate(targets=new_columns) if isinstance(node,
+                                                                                  Projection) else updated_node.mutate(
+                group_columns=new_columns)
+        """
+        elif isinstance(node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
+            for column in node.predicate.itercolumns():
+                if column in column_mapping.keys():
+                    new_columns.append(column_mapping[column])
+                else:
+                    new_columns.append(column)
+            updated_node = node.mutate(predicate=CompoundPredicate.create_and(new_columns))
+        """
+
+        if isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
+            updated_link_child = self._update_column_name(updated_node.left_input, column_mapping)
+            updated_right_child = self._update_column_name(updated_node.right_input, column_mapping)
+            return updated_node.mutate(left_child=updated_link_child, right_child=updated_right_child)
+        elif isinstance(node, (SemiJoin, AntiJoin)):
+            updated_input_node = self._update_column_name(updated_node.input_node, column_mapping)
+            updated_subquery_node = self._update_column_name(updated_node.subquery_node, column_mapping)
+            return updated_node.mutate(input_node=updated_input_node, subquery_node=updated_subquery_node)
+        else:
+            updated_child = self._update_column_name(updated_node.input_node, column_mapping)
+            return updated_node.mutate(input_node=updated_child)
 
     def _find_all_dependent_columns(self, base_node: RelNode, dependent_node: RelNode) -> List[ColumnReference]:
         """
@@ -219,14 +264,10 @@ class Optimizer:
         tables = base_node.tables()
         dependent_columns = []
 
-        if isinstance(dependent_node, Projection):
-            dependent_columns += self._find_all_dependent_projection_columns(dependent_node, tables)
-        elif isinstance(dependent_node, ThetaJoin):
-            dependent_columns += self._find_all_dependent_join_columns(dependent_node, tables)
-        elif isinstance(dependent_node, GroupBy):
-            dependent_columns += self._find_all_dependent_groupby_columns(dependent_node, tables)
-        elif isinstance(dependent_node, Selection):
-            dependent_columns += self._find_all_dependent_selection_columns(dependent_node, tables)
+        if isinstance(dependent_node, (Projection, GroupBy)):
+            dependent_columns += self._extract_columns_from_simple_conditions(dependent_node, tables)
+        elif isinstance(dependent_node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
+            dependent_columns += self._extract_columns_from_composite_conditions(dependent_node, tables)
 
         for child_node in dependent_node.children():
             dependent_columns += self._find_all_dependent_columns(child_node, base_node)
@@ -235,49 +276,26 @@ class Optimizer:
         return dependent_columns
 
     @staticmethod
-    def _find_all_dependent_projection_columns(project: Projection, tables: frozenset[TableReference]) \
-            -> List[ColumnReference]:
+    def _extract_columns_from_composite_conditions(node: Selection | ThetaJoin | DependentJoin | SemiJoin | AntiJoin,
+                                                   tables: frozenset[TableReference]) -> List[ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
 
-        for sql_expr in project.columns:
+        for column in node.predicate.itercolumns():
+            if column.table.identifier() in tables_identifier:
+                columns.append(column)
+        return columns
+
+    @staticmethod
+    def _extract_columns_from_simple_conditions(node: GroupBy | Projection,
+                                                tables: frozenset[TableReference]) -> List[ColumnReference]:
+        columns = []
+        tables_identifier = [table.identifier() for table in tables]
+
+        node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
+
+        for sql_expr in node_columns:
             for column in sql_expr.itercolumns():
                 if column.table.identifier() in tables_identifier:
                     columns.append(column)
-
-        return columns
-
-    @staticmethod
-    def _find_all_dependent_join_columns(join: ThetaJoin, tables: frozenset[TableReference]) -> List[ColumnReference]:
-        columns = []
-        tables_identifier = [table.identifier() for table in tables]
-
-        for column in join.predicate.itercolumns():
-            if column.table.identifier() in tables_identifier:
-                columns.append(column)
-
-        return columns
-
-    @staticmethod
-    def _find_all_dependent_groupby_columns(groupby: GroupBy, tables: frozenset[TableReference]) -> List[
-        ColumnReference]:
-        columns = []
-        tables_identifier = [table.identifier() for table in tables]
-
-        for sql_expr in groupby.group_columns:
-            for column in sql_expr.itercolumns():
-                if column.table.identifier() in tables_identifier:
-                    columns.append(column)
-
-        return columns
-
-    @staticmethod
-    def _find_all_dependent_selection_columns(selection: Selection, tables: frozenset[TableReference]) -> List[
-        ColumnReference]:
-        columns = []
-        tables_identifier = [table.identifier() for table in tables]
-
-        for column in selection.predicate.itercolumns():
-            if column.table.identifier() in tables_identifier:
-                columns.append(column)
         return columns
