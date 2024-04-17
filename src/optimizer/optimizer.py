@@ -138,6 +138,9 @@ class Optimizer:
     def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
 
         updated_t2 = None
+        tab = TableReference("DummyTable", "DummyTable")
+        col = ColumnReference("dummy", tab)
+        dummy_rel = Relation(tab, [col])
 
         def find_and_remove_t1_in_t2(node: RelNode):
             nonlocal updated_t2
@@ -147,7 +150,7 @@ class Optimizer:
             if len(node.children()) == 0:
                 return False
 
-            if t1 in children and isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
+            if t1 in children and isinstance(node, CrossProduct):
                 tail_node = node.right_input if node.left_input == t1 else node.left_input
                 if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
                     if node.parent_node.left_input == node:
@@ -166,6 +169,12 @@ class Optimizer:
                 else:
                     updated_t2 = self._update_relalg_structure(
                         node.parent_node.mutate(input_node=tail_node))
+                return True
+            elif t1 in children and isinstance(node, ThetaJoin):
+                if node.left_input == t1:
+                    updated_t2 = self._update_relalg_structure(node.mutate(left_child=dummy_rel))
+                else:
+                    updated_t2 = self._update_relalg_structure(node.mutate(right_child=dummy_rel))
                 return True
 
             for child in children:
