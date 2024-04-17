@@ -37,6 +37,8 @@ class Optimizer:
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
 
+        # 5. Push-Down
+
         return t1, t2, dependent_join, d
 
     @staticmethod
