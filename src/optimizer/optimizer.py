@@ -65,7 +65,7 @@ class Optimizer:
         """
         Derives outer query (T1) and subquery (T2) from the given subquery node.
         """
-        t2 = self._update_relalg_structure(subquery.input_node.mutate(as_root=True))
+        t2 = subquery.input_node.mutate(as_root=True)
 
         # CrossProduct
         parent_node = subquery.parent_node
@@ -74,68 +74,45 @@ class Optimizer:
         if parent_node:
             for child in parent_node.children():
                 if child != t2:
-                    t1 = self._update_relalg_structure(child.mutate(as_root=True))
+                    t1 = child.mutate(as_root=True)
                     break
 
         return t1, t2
 
-    def _update_node_and_all_children_nodes(self, node: RelNode, updated_nodes_set=None) -> Optional[RelNode]:
-        """
-        Recursively updates the given node and all its child nodes.
-        """
-        if updated_nodes_set is None:
-            updated_nodes_set = set()
-
-        if node in updated_nodes_set or isinstance(node, Relation):
-            return node
-
-        if isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
-            updated_link_child = self._update_node_and_all_children_nodes(node.left_input)
-            updated_right_child = self._update_node_and_all_children_nodes(node.right_input)
-            return node.mutate(left_child=updated_link_child, right_child=updated_right_child)
-        elif isinstance(node, (SemiJoin, AntiJoin)):
-            updated_input_node = self._update_node_and_all_children_nodes(node.input_node)
-            updated_subquery_node = self._update_node_and_all_children_nodes(node.subquery_node)
-            return node.mutate(input_node=updated_input_node, subquery_node=updated_subquery_node)
-        else:
-            updated_child = self._update_node_and_all_children_nodes(node.input_node)
-            return node.mutate(input_node=updated_child)
-
-    def _update_relalg_structure(self, node: RelNode, updated_nodes_set=None, **kwargs) -> RelNode:
+    def _update_relalg_structure(self, node: RelNode, **kwargs) -> RelNode:
         """
         Recursively updates the entire relational algebra structure beginning from the specified node.
 
-        This method first updates the given node along with all its child nodes recursively. Once the children are updated,
         it proceeds to update the parent node, thereby ensuring that modifications are propagated throughout the entire tree structure.
         The process is repeated until the root of the tree is reached and updated, effectively updating the whole relational algebra structure.
 
         Parameters:
         - node: The starting node from which updates are to be propagated.
-        - updated_nodes_set: A set used to keep track of nodes that have already been updated to prevent redundant updates.
         - **kwargs: Additional arguments that may be required for updating nodes, such as modifying specific attributes of the nodes.
         """
-        if updated_nodes_set is None:
-            updated_nodes_set = set()
 
-        updated_node = self._update_node_and_all_children_nodes(node.mutate(**kwargs), updated_nodes_set)
-        updated_nodes_set.add(updated_node)
+        updated_node = node.mutate(**kwargs)
 
         if updated_node.parent_node is None:
             return updated_node
 
         parent_node = updated_node.parent_node
-        if isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
+        if parent_node is None:
+            return updated_node
+        elif isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if parent_node.left_input == node:
-                return self._update_relalg_structure(parent_node, updated_nodes_set, left_child=updated_node)
+                updated_parent_node = self._update_relalg_structure(parent_node, left_child=updated_node)
             else:
-                return self._update_relalg_structure(parent_node, updated_nodes_set, right_child=updated_node)
+                updated_parent_node = self._update_relalg_structure(parent_node, right_child=updated_node)
         elif isinstance(parent_node, (AntiJoin, SemiJoin)):
             if parent_node.input_node == node:
-                return self._update_relalg_structure(parent_node, updated_nodes_set, input_node=updated_node)
+                updated_parent_node = self._update_relalg_structure(parent_node, input_node=updated_node)
             else:
-                return self._update_relalg_structure(parent_node, updated_nodes_set, subquery_node=updated_node)
+                updated_parent_node = self._update_relalg_structure(parent_node, subquery_node=updated_node)
         else:
-            return self._update_relalg_structure(parent_node, updated_nodes_set, input_node=updated_node)
+            updated_parent_node = self._update_relalg_structure(parent_node, input_node=updated_node)
+
+        return next((child for child in updated_parent_node.children() if child == updated_node), updated_node)
 
     def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
 
@@ -157,26 +134,26 @@ class Optimizer:
                 if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
                     if node.parent_node.left_input == node:
                         updated_t2 = self._update_relalg_structure(
-                            node.parent_node.mutate(left_child=tail_node))
+                            node.parent_node, left_child=tail_node)
                     else:
                         updated_t2 = self._update_relalg_structure(
-                            node.parent_node.mutate(right_child=tail_node))
+                            node.parent_node, right_child=tail_node)
                 elif isinstance(node.parent_node, (SemiJoin, AntiJoin)):
                     if node.parent_node.input_node == node:
                         updated_t2 = self._update_relalg_structure(
-                            node.parent_node.mutate(input_node=tail_node))
+                            node.parent_node, input_node=tail_node)
                     else:
                         updated_t2 = self._update_relalg_structure(
-                            node.parent_node.mutate(subquery_node=tail_node))
+                            node.parent_node, subquery_node=tail_node)
                 else:
                     updated_t2 = self._update_relalg_structure(
-                        node.parent_node.mutate(input_node=tail_node))
+                        node.parent_node, input_node=tail_node)
                 return True
             elif t1 in children and isinstance(node, ThetaJoin):
                 if node.left_input == t1:
-                    updated_t2 = self._update_relalg_structure(node.mutate(left_child=dummy_rel))
+                    updated_t2 = self._update_relalg_structure(node, left_child=dummy_rel)
                 else:
-                    updated_t2 = self._update_relalg_structure(node.mutate(right_child=dummy_rel))
+                    updated_t2 = self._update_relalg_structure(node, right_child=dummy_rel)
                 return True
 
             for child in children:
@@ -187,7 +164,7 @@ class Optimizer:
 
         find_and_remove_t1_in_t2(t2)
 
-        dependent_join = DependentJoin(t1, updated_t2)
+        dependent_join = DependentJoin(t1, updated_t2.root())
         updated_dependent_join = self._update_relalg_structure(dependent_join.mutate())
         return updated_dependent_join
 
@@ -219,9 +196,7 @@ class Optimizer:
         updated_dependent_join = self._update_relalg_structure(dependent_join, left_child=updated_domain,
                                                                right_child=updated_t2)
         compound_join_predicates = CompoundPredicate.create_and(join_predicates)
-        root = ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
-
-        return self._update_relalg_structure(root.mutate())
+        return ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
 
     def _update_column_name(self, node: RelNode, column_mapping: Dict[ColumnReference, ColumnReference]) -> RelNode:
         if isinstance(node, Relation):
