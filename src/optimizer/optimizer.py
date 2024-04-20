@@ -32,12 +32,14 @@ class Optimizer:
         # 2. Outerquery (T1), Subquery (T2) berechnen
         t1, t2 = self._derive_outer_and_sub_query(local_rel_nodes[0])
         all_dependent_columns = self._find_all_dependent_columns(t1, t2)
+        print(all_dependent_columns)
 
         # 3. in die Form Dependent-join konvertieren
         dependent_join = self._convert_to_dependent_join(t1, t2)
 
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
+        print(Utils.detailed_structure_visualization(d))
 
         # 5. Push-Down
 
@@ -251,7 +253,7 @@ class Optimizer:
             dependent_columns += self._extract_columns_from_composite_conditions(dependent_node, tables)
 
         for child_node in dependent_node.children():
-            dependent_columns += self._find_all_dependent_columns(child_node, base_node)
+            dependent_columns += self._find_all_dependent_columns(base_node, child_node)
 
         dependent_columns = list(set(dependent_columns))
         return dependent_columns
