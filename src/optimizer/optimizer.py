@@ -8,12 +8,14 @@ from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, S
 from postbound.qal.transform import rename_columns_in_predicate
 
 from src.optimizer.dependent_join import DependentJoin
+from src.optimizer.push_down_manager import PushDownManager
 from src.utils.utils import Utils
 
 
 class Optimizer:
-    def __init__(self):
-        pass
+    def __init__(self, pushDownManager: PushDownManager, utils: Utils):
+        self.pushDownManager = pushDownManager
+        self.utils = utils
 
     def optimize_unnesting(self, relalg: RelNode):
         """
@@ -32,18 +34,17 @@ class Optimizer:
         # 2. Outerquery (T1), Subquery (T2) berechnen
         t1, t2 = self._derive_outer_and_sub_query(local_rel_nodes[0])
         all_dependent_columns = self._find_all_dependent_columns(t1, t2)
-        print(all_dependent_columns)
 
         # 3. in die Form Dependent-join konvertieren
         dependent_join = self._convert_to_dependent_join(t1, t2)
 
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
-        print(Utils.detailed_structure_visualization(d))
 
         # 5. Push-Down
+        result = self.pushDownManager.push_down(d, all_dependent_columns)
 
-        return t1, t2, dependent_join, d
+        return t1, t2, dependent_join, d, result
 
     @staticmethod
     def _find_dependent_subquery_node(relalg: RelNode) -> List[SubqueryScan]:
@@ -83,41 +84,6 @@ class Optimizer:
 
         return t1, t2
 
-    def _update_relalg_structure(self, node: RelNode, **kwargs) -> RelNode:
-        """
-        Recursively updates the entire relational algebra structure beginning from the specified node.
-
-        it proceeds to update the parent node, thereby ensuring that modifications are propagated throughout the entire tree structure.
-        The process is repeated until the root of the tree is reached and updated, effectively updating the whole relational algebra structure.
-
-        Parameters:
-        - node: The starting node from which updates are to be propagated.
-        - **kwargs: Additional arguments that may be required for updating nodes, such as modifying specific attributes of the nodes.
-        """
-
-        updated_node = node.mutate(**kwargs)
-
-        if updated_node.parent_node is None:
-            return updated_node
-
-        parent_node = updated_node.parent_node
-        if parent_node is None:
-            return updated_node
-        elif isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
-            if parent_node.left_input == node:
-                updated_parent_node = self._update_relalg_structure(parent_node, left_child=updated_node)
-            else:
-                updated_parent_node = self._update_relalg_structure(parent_node, right_child=updated_node)
-        elif isinstance(parent_node, (AntiJoin, SemiJoin)):
-            if parent_node.input_node == node:
-                updated_parent_node = self._update_relalg_structure(parent_node, input_node=updated_node)
-            else:
-                updated_parent_node = self._update_relalg_structure(parent_node, subquery_node=updated_node)
-        else:
-            updated_parent_node = self._update_relalg_structure(parent_node, input_node=updated_node)
-
-        return next((child for child in updated_parent_node.children() if child == updated_node), updated_node)
-
     def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
 
         updated_t2 = None
@@ -137,27 +103,27 @@ class Optimizer:
                 tail_node = node.right_input if node.left_input == t1 else node.left_input
                 if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
                     if node.parent_node.left_input == node:
-                        updated_t2 = self._update_relalg_structure(
+                        updated_t2 = self.utils.update_relalg_structure_upward(
                             node.parent_node, left_child=tail_node)
                     else:
-                        updated_t2 = self._update_relalg_structure(
+                        updated_t2 = self.utils.update_relalg_structure_upward(
                             node.parent_node, right_child=tail_node)
                 elif isinstance(node.parent_node, (SemiJoin, AntiJoin)):
                     if node.parent_node.input_node == node:
-                        updated_t2 = self._update_relalg_structure(
+                        updated_t2 = self.utils.update_relalg_structure_upward(
                             node.parent_node, input_node=tail_node)
                     else:
-                        updated_t2 = self._update_relalg_structure(
+                        updated_t2 = self.utils.update_relalg_structure_upward(
                             node.parent_node, subquery_node=tail_node)
                 else:
-                    updated_t2 = self._update_relalg_structure(
+                    updated_t2 = self.utils.update_relalg_structure_upward(
                         node.parent_node, input_node=tail_node)
                 return True
             elif t1 in children and isinstance(node, ThetaJoin):
                 if node.left_input == t1:
-                    updated_t2 = self._update_relalg_structure(node, left_child=dummy_rel)
+                    updated_t2 = self.utils.update_relalg_structure_upward(node, left_child=dummy_rel)
                 else:
-                    updated_t2 = self._update_relalg_structure(node, right_child=dummy_rel)
+                    updated_t2 = self.utils.update_relalg_structure_upward(node, right_child=dummy_rel)
                 return True
 
             for child in children:
@@ -169,7 +135,7 @@ class Optimizer:
         find_and_remove_t1_in_t2(t2)
 
         dependent_join = DependentJoin(t1, updated_t2.root())
-        updated_dependent_join = self._update_relalg_structure(dependent_join.mutate())
+        updated_dependent_join = self.utils.update_relalg_structure_upward(dependent_join.mutate())
         return updated_dependent_join
 
     def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
@@ -218,7 +184,7 @@ class Optimizer:
                         new_columns.append(column)
 
             kwargs = {'targets': new_columns} if isinstance(node, Projection) else {'group_columns': new_columns}
-            updated_node = self._update_relalg_structure(node, **kwargs)
+            updated_node = self.utils.update_relalg_structure_upward(node, **kwargs)
 
         elif isinstance(node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
             new_predicate = rename_columns_in_predicate(node.predicate, column_mapping)
