@@ -5,8 +5,10 @@ from postbound.qal.expressions import LogicalSqlOperators
 from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
     Relation, Rename, SemiJoin, AntiJoin
+from postbound.qal.transform import rename_columns_in_predicate
 
 from src.optimizer.dependent_join import DependentJoin
+from src.utils.utils import Utils
 
 
 class Optimizer:
@@ -186,17 +188,17 @@ class Optimizer:
             join_predicates.append(join_predicate)
 
         # Domain-node
-        rename = Rename(t1, {}, parent_node=None)
+        t1_without_parent = t1.mutate(as_root=True)
+        rename = Rename(t1_without_parent, {}, parent_node=None)
         domain = Projection(rename, predicates_dict.values())
-        updated_domain = self._update_relalg_structure(domain)
 
         # free variables of t2 (subquery) update to match the domain node
         updated_t2 = self._update_column_name(t2, predicates_dict)
 
-        updated_dependent_join = self._update_relalg_structure(dependent_join, left_child=updated_domain,
-                                                               right_child=updated_t2)
+        updated_dependent_join = dependent_join.mutate(left_child=domain, right_child=updated_t2)
         compound_join_predicates = CompoundPredicate.create_and(join_predicates)
-        return ThetaJoin(t1, updated_dependent_join, compound_join_predicates)
+        return ThetaJoin(updated_dependent_join.left_input.input_node.input_node, updated_dependent_join,
+                         compound_join_predicates).mutate()
 
     def _update_column_name(self, node: RelNode, column_mapping: Dict[ColumnReference, ColumnReference]) -> RelNode:
         if isinstance(node, Relation):
@@ -206,7 +208,6 @@ class Optimizer:
 
         if isinstance(node, (GroupBy, Projection)):
             node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
-
             for sql_expr in node_columns:
                 for column in sql_expr.itercolumns():
                     if column in column_mapping.keys():
@@ -214,18 +215,12 @@ class Optimizer:
                     else:
                         new_columns.append(column)
 
-            updated_node = updated_node.mutate(targets=new_columns) if isinstance(node,
-                                                                                  Projection) else updated_node.mutate(
-                group_columns=new_columns)
-        """
+            kwargs = {'targets': new_columns} if isinstance(node, Projection) else {'group_columns': new_columns}
+            updated_node = self._update_relalg_structure(node, **kwargs)
+
         elif isinstance(node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
-            for column in node.predicate.itercolumns():
-                if column in column_mapping.keys():
-                    new_columns.append(column_mapping[column])
-                else:
-                    new_columns.append(column)
-            updated_node = node.mutate(predicate=CompoundPredicate.create_and(new_columns))
-        """
+            new_predicate = rename_columns_in_predicate(node.predicate, column_mapping)
+            updated_node = node.mutate(predicate=new_predicate)
 
         if isinstance(node, (ThetaJoin, CrossProduct, DependentJoin)):
             updated_link_child = self._update_column_name(updated_node.left_input, column_mapping)
