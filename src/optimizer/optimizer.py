@@ -5,7 +5,7 @@ from postbound.qal.base import ColumnReference, TableReference
 from postbound.qal.expressions import LogicalSqlOperators
 from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
-    Relation, Rename, SemiJoin, AntiJoin
+    Relation, Rename, SemiJoin, AntiJoin, Map
 
 from src.optimizer.dependent_join import DependentJoin
 from src.optimizer.push_down_manager import PushDownManager
@@ -181,6 +181,7 @@ class Optimizer:
             updated_node = self.utils.update_relalg_structure_upward(node, targets=new_columns)
         elif isinstance(node, GroupBy):
             new_aggregates = {}
+            new_group_columns = []
             for key_set, value_set in node.aggregates.items():
                 new_key_set = frozenset(
                     transform._rename_columns_in_expression(expr, column_mapping) for expr in key_set)
@@ -189,7 +190,22 @@ class Optimizer:
                     transform._rename_columns_in_expression(expr, column_mapping) for expr in value_set)
                 new_aggregates[new_key_set] = new_value_set
 
-            updated_node = self.utils.update_relalg_structure_upward(node, aggregates=new_aggregates)
+            for column in node.group_columns:
+                new_group_columns.append(transform._rename_columns_in_expression(column, column_mapping))
+
+            updated_node = self.utils.update_relalg_structure_upward(node, group_columns=new_group_columns,
+                                                                     aggregates=new_aggregates)
+        elif isinstance(node, Map):
+            new_mappings = {}
+            for key_set, value_set in node.mapping.items():
+                new_key_set = frozenset(
+                    transform._rename_columns_in_expression(expr, column_mapping) for expr in key_set)
+
+                new_value_set = frozenset(
+                    transform._rename_columns_in_expression(expr, column_mapping) for expr in value_set)
+                new_mappings[new_key_set] = new_value_set
+
+            updated_node = self.utils.update_relalg_structure_upward(node, mapping=new_mappings)
 
         elif isinstance(node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
             new_predicate = transform.rename_columns_in_predicate(node.predicate, column_mapping)
@@ -218,7 +234,7 @@ class Optimizer:
         tables = base_node.tables()
         dependent_columns = []
 
-        if isinstance(dependent_node, (Projection, GroupBy)):
+        if isinstance(dependent_node, (Map, Projection, GroupBy)):
             dependent_columns += self._extract_columns_from_simple_conditions(dependent_node, tables)
         elif isinstance(dependent_node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
             dependent_columns += self._extract_columns_from_composite_conditions(dependent_node, tables)
@@ -241,15 +257,30 @@ class Optimizer:
         return columns
 
     @staticmethod
-    def _extract_columns_from_simple_conditions(node: GroupBy | Projection,
+    def _extract_columns_from_simple_conditions(node: Map | GroupBy | Projection,
                                                 tables: frozenset[TableReference]) -> List[ColumnReference]:
         columns = []
         tables_identifier = [table.identifier() for table in tables]
 
-        node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
+        if isinstance(node, (GroupBy, Projection)):
+            node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
 
-        for sql_expr in node_columns:
-            for column in sql_expr.itercolumns():
-                if column.table.identifier() in tables_identifier:
-                    columns.append(column)
+            for sql_expr in node_columns:
+                for column in sql_expr.itercolumns():
+                    if column.table.identifier() in tables_identifier:
+                        columns.append(column)
+
+        if isinstance(node, (GroupBy, Map)):
+            disc = node.aggregates if isinstance(node, GroupBy) else node.mapping
+            for key_set, value_set in disc.items():
+                for key_expr in key_set:
+                    for key_column in key_expr.itercolumns():
+                        if key_column.table.identifier() in tables_identifier:
+                            columns.append(key_column)
+
+                for value_expr in value_set:
+                    for value_column in value_expr.itercolumns():
+                        if value_column.table.identifier() in tables_identifier:
+                            columns.append(value_column)
+
         return columns
