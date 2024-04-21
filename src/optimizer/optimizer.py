@@ -42,7 +42,7 @@ class Optimizer:
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
 
         # 5. Push-Down
-        # result = self.pushDownManager.push_down(d, all_dependent_columns)
+        # result = self.pushDownManager.push_down(d)
 
         return t1, t2, dependent_join, d
 
@@ -84,7 +84,7 @@ class Optimizer:
 
         return t1, t2
 
-    def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> RelNode:
+    def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> Optional[DependentJoin]:
 
         updated_t2 = None
         tab = TableReference("DummyTable", "DummyTable")
