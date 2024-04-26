@@ -26,7 +26,6 @@ class PushDownManager:
         #  1) False
         #    - Die letzte Regel der Push-Down-Regel wird angewendet, der dependent-join-Knoten wird beseitigt und die Schleife wird beendet
         #  2) True
-        #   - Überprüfen des Knotentyps des rechten_Kindes des dependent-join-Knotens
         #   - Anwenden eine Push-down-Regel für diesen Typ. An diesem Punkt wird die gesamte Baumstruktur aktualisiert
         #   - zurück zu Schritt 1 und wiederholen die Schleife
         if self._check_free_variables_in_right_child(dependent_node):
@@ -65,7 +64,7 @@ class PushDownManager:
             for column in node.predicate.itercolumns():
                 if column.table.identifier() is tab_d_identifier:
                     return True
-
+                
         for child in node.children():
             if self._check_free_variables_in_right_child(child):
                 return True
@@ -77,8 +76,10 @@ class PushDownManager:
             return self._push_down_rule_selection(node)
         elif isinstance(node, Projection):
             return self._push_down_rule_projection(node)
-        elif isinstance(node, (GroupBy, Map)):
+        elif isinstance(node, GroupBy):
             return self._push_down_rule_groupby(node)
+        elif isinstance(node, Map):
+            return self._push_down_rule_map(node)
         elif isinstance(node, ThetaJoin):
             return self._push_down_rule_join(node)
 
@@ -91,18 +92,28 @@ class PushDownManager:
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_projection(self, node: Projection) -> RelNode:
+        additional_columns = node.parent_node.left_input.columns
+        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
+        updated_node = node.mutate(as_root=True, input_node=dependent_join, targets=node.columns + additional_columns)
+
+        return self._push_down_dependent_join(node, updated_node)
+
+    def _push_down_rule_map(self, node: GroupBy | Map) -> RelNode:
         dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_groupby(self, node: GroupBy | Map) -> RelNode:
+        additional_columns = node.parent_node.left_input.columns
         dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
-        updated_node = node.mutate(as_root=True, input_node=dependent_join)
+        updated_node = node.mutate(as_root=True, input_node=dependent_join,
+                                   group_columns=node.group_columns + additional_columns)
 
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_join(self, node: ThetaJoin) -> RelNode:
+        # To-Do
         dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
