@@ -1,6 +1,6 @@
 from typing import Optional, List
 
-from postbound.qal import base, predicates, expressions
+from postbound.qal import base
 from postbound.qal.relalg import RelNode, Projection, GroupBy, Selection, ThetaJoin, SemiJoin, AntiJoin, Map, Relation, \
     CrossProduct
 
@@ -64,7 +64,7 @@ class PushDownManager:
             for column in node.predicate.itercolumns():
                 if column.table.identifier() is tab_d_identifier:
                     return True
-                
+
         for child in node.children():
             if self._check_free_variables_in_right_child(child):
                 return True
@@ -124,14 +124,9 @@ class PushDownManager:
         left_child = dependent_join.left_input.mutate(as_root=True)
         right_child = dependent_join.right_input.mutate(as_root=True)
 
-        ## To-Do: Join ohne Prädikat
-        tab_d = base.TableReference("dummy", "d")
-        column_d = base.ColumnReference("d", tab_d)
-        join_predicate = predicates.as_predicate(column_d, expressions.LogicalSqlOperators.Equal, column_d)
-
-        join = ThetaJoin(left_input=left_child, right_input=right_child, parent_node=dependent_join.parent_node,
-                         predicate=join_predicate)
-        return self.utils.update_relalg_structure_upward(join)
+        cross_product = CrossProduct(left_input=left_child, right_input=right_child,
+                                     parent_node=dependent_join.parent_node)
+        return self.utils.update_relalg_structure_upward(cross_product)
 
     def _push_down_dependent_join(self, node: RelNode, updated_node: RelNode) -> RelNode:
         dependent_join_parent_node = node.parent_node.parent_node
