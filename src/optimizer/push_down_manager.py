@@ -28,13 +28,13 @@ class PushDownManager:
         #  2) True
         #   - Anwenden eine Push-down-Regel für diesen Typ. An diesem Punkt wird die gesamte Baumstruktur aktualisiert
         #   - zurück zu Schritt 1 und wiederholen die Schleife
-        if self._check_free_variables_in_right_child(dependent_node):
+        if self._check_free_variables_in_node(dependent_node):
             updated_node = self._apply_push_down_rule(dependent_node)
         else:
             updated_node = self._apply_push_down_rule_final(dependent_node)
         return self.push_down(updated_node)
 
-    def _check_free_variables_in_right_child(self, node: RelNode) -> bool:
+    def _check_free_variables_in_node(self, node: RelNode) -> bool:
         if isinstance(node, Relation):
             return False
 
@@ -66,7 +66,7 @@ class PushDownManager:
                     return True
 
         for child in node.children():
-            if self._check_free_variables_in_right_child(child):
+            if self._check_free_variables_in_node(child):
                 return True
 
         return False
@@ -113,9 +113,12 @@ class PushDownManager:
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_join(self, node: ThetaJoin) -> RelNode:
-        # To-Do
-        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
-        updated_node = node.mutate(as_root=True, input_node=dependent_join)
+        if self._check_free_variables_in_node(node.right_input):
+            dependent_join = node.parent_node.mutate(as_root=True, right_child=node.right_input)
+            updated_node = node.mutate(as_root=True, right_child=dependent_join)
+        else:
+            dependent_join = node.parent_node.mutate(as_root=True, right_child=node.left_input)
+            updated_node = node.mutate(as_root=True, left_child=dependent_join)
 
         return self._push_down_dependent_join(node, updated_node)
 
@@ -123,6 +126,11 @@ class PushDownManager:
         dependent_join = node.parent_node
         left_child = dependent_join.left_input.mutate(as_root=True)
         right_child = dependent_join.right_input.mutate(as_root=True)
+
+        if isinstance(node, Relation) and node.table.full_name == "DummyTable":
+            parent_node = dependent_join.parent_node
+            updated_parent_node = parent_node.mutate(left_child=left_child)
+            return self.utils.update_relalg_structure_upward(updated_parent_node)
 
         cross_product = CrossProduct(left_input=left_child, right_input=right_child,
                                      parent_node=dependent_join.parent_node)
