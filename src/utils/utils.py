@@ -44,9 +44,9 @@ class Utils:
             return updated_node
         elif isinstance(parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if parent_node.left_input == node:
-                updated_parent_node = self.update_relalg_structure_upward(parent_node, left_child=updated_node)
+                updated_parent_node = self.update_relalg_structure_upward(parent_node, left_input=updated_node)
             else:
-                updated_parent_node = self.update_relalg_structure_upward(parent_node, right_child=updated_node)
+                updated_parent_node = self.update_relalg_structure_upward(parent_node, right_input=updated_node)
         elif isinstance(parent_node, (AntiJoin, SemiJoin)):
             if parent_node.input_node == node:
                 updated_parent_node = self.update_relalg_structure_upward(parent_node, input_node=updated_node)

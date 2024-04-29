@@ -86,39 +86,48 @@ class PushDownManager:
         return node
 
     def _push_down_rule_selection(self, node: Selection) -> RelNode:
-        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
+        new_input_node = node.input_node.mutate(as_root=True)
+        dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_projection(self, node: Projection) -> RelNode:
         additional_columns = node.parent_node.left_input.columns
-        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
-        updated_node = node.mutate(as_root=True, input_node=dependent_join, targets=node.columns + additional_columns)
+        updated_columns = tuple(node.columns + additional_columns)
+
+        new_input_node = node.input_node.mutate(as_root=True)
+        dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
+        updated_node = node.mutate(as_root=True, input_node=dependent_join.clone(),
+                                   targets=updated_columns)
 
         return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_map(self, node: GroupBy | Map) -> RelNode:
-        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
+    def _push_down_rule_map(self, node: Map) -> RelNode:
+        new_input_node = node.input_node.mutate(as_root=True)
+        dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
         return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_groupby(self, node: GroupBy | Map) -> RelNode:
+    def _push_down_rule_groupby(self, node: GroupBy) -> RelNode:
         additional_columns = node.parent_node.left_input.columns
-        dependent_join = node.parent_node.mutate(as_root=True, right_child=node.input_node)
+        updated_columns = tuple(node.group_columns + additional_columns)
+        new_input_node = node.input_node.mutate(as_root=True)
+
+        dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join,
-                                   group_columns=node.group_columns + additional_columns)
+                                   group_columns=updated_columns)
 
         return self._push_down_dependent_join(node, updated_node)
 
     def _push_down_rule_join(self, node: ThetaJoin) -> RelNode:
         if self._check_free_variables_in_node(node.right_input):
-            dependent_join = node.parent_node.mutate(as_root=True, right_child=node.right_input)
-            updated_node = node.mutate(as_root=True, right_child=dependent_join)
+            dependent_join = node.parent_node.mutate(as_root=True, right_input=node.right_input)
+            updated_node = node.mutate(as_root=True, right_input=dependent_join)
         else:
-            dependent_join = node.parent_node.mutate(as_root=True, right_child=node.left_input)
-            updated_node = node.mutate(as_root=True, left_child=dependent_join)
+            dependent_join = node.parent_node.mutate(as_root=True, right_input=node.left_input)
+            updated_node = node.mutate(as_root=True, left_input=dependent_join)
 
         return self._push_down_dependent_join(node, updated_node)
 
@@ -129,7 +138,7 @@ class PushDownManager:
 
         if isinstance(node, Relation) and node.table.full_name == "DummyTable":
             parent_node = dependent_join.parent_node
-            updated_parent_node = parent_node.mutate(left_child=left_child)
+            updated_parent_node = parent_node.mutate(left_input=left_child)
             return self.utils.update_relalg_structure_upward(updated_parent_node)
 
         cross_product = CrossProduct(left_input=left_child, right_input=right_child,
@@ -142,10 +151,10 @@ class PushDownManager:
         if isinstance(dependent_join_parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if dependent_join_parent_node.left_input == node.parent_node:
                 updated_parent = self.utils.update_relalg_structure_upward(
-                    dependent_join_parent_node, left_child=updated_node)
+                    dependent_join_parent_node, left_input=updated_node)
             else:
                 updated_parent = self.utils.update_relalg_structure_upward(
-                    dependent_join_parent_node, right_child=updated_node)
+                    dependent_join_parent_node, right_input=updated_node)
         elif isinstance(dependent_join_parent_node, (SemiJoin, AntiJoin)):
             if dependent_join_parent_node.input_node == node:
                 updated_parent = self.utils.update_relalg_structure_upward(
