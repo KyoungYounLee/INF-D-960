@@ -177,7 +177,7 @@ class Optimizer:
         if isinstance(node, Projection):
             new_columns = []
             for sql_expr in node.columns:
-                new_columns.append(transform._rename_columns_in_expression(sql_expr, column_mapping))
+                new_columns.append(transform.rename_columns_in_expression(sql_expr, column_mapping))
 
             updated_node = self.utils.update_relalg_structure_upward(node, targets=tuple(new_columns))
         elif isinstance(node, GroupBy):
@@ -185,14 +185,14 @@ class Optimizer:
             new_group_columns = []
             for key_set, value_set in node.aggregates.items():
                 new_key_set = frozenset(
-                    transform._rename_columns_in_expression(expr, column_mapping) for expr in key_set)
+                    transform.rename_columns_in_expression(expr, column_mapping) for expr in key_set)
 
                 new_value_set = frozenset(
-                    transform._rename_columns_in_expression(expr, column_mapping) for expr in value_set)
+                    transform.rename_columns_in_expression(expr, column_mapping) for expr in value_set)
                 new_aggregates[new_key_set] = new_value_set
 
             for column in node.group_columns:
-                new_group_columns.append(transform._rename_columns_in_expression(column, column_mapping))
+                new_group_columns.append(transform.rename_columns_in_expression(column, column_mapping))
 
             updated_node = self.utils.update_relalg_structure_upward(node, group_columns=tuple(new_group_columns),
                                                                      aggregates=frozendict(new_aggregates))
@@ -200,10 +200,10 @@ class Optimizer:
             new_mappings = {}
             for key_set, value_set in node.mapping.items():
                 new_key_set = frozenset(
-                    transform._rename_columns_in_expression(expr, column_mapping) for expr in key_set)
+                    transform.rename_columns_in_expression(expr, column_mapping) for expr in key_set)
 
                 new_value_set = frozenset(
-                    transform._rename_columns_in_expression(expr, column_mapping) for expr in value_set)
+                    transform.rename_columns_in_expression(expr, column_mapping) for expr in value_set)
                 new_mappings[new_key_set] = new_value_set
 
             updated_node = self.utils.update_relalg_structure_upward(node, mapping=frozendict(new_mappings))
