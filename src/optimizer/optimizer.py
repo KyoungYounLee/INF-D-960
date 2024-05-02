@@ -158,7 +158,7 @@ class Optimizer:
 
         # Domain-node
         t1_without_parent = t1.mutate(as_root=True)
-        rename = Rename(t1_without_parent, {}, parent_node=None)
+        rename = Rename(t1_without_parent, predicates_dict, parent_node=None)
         domain = Projection(rename, predicates_dict.values())
 
         # free variables of t2 (subquery) update to match the domain node
