@@ -2,7 +2,7 @@ from typing import List, Tuple, Optional, Dict
 
 from postbound.qal import transform
 from postbound.qal.base import ColumnReference, TableReference
-from postbound.qal.expressions import LogicalSqlOperators
+from postbound.qal.expressions import LogicalSqlOperators, ColumnExpression
 from postbound.qal.predicates import as_predicate, CompoundPredicate
 from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, Selection, GroupBy, CrossProduct, \
     Relation, Rename, SemiJoin, AntiJoin, Map
@@ -34,7 +34,7 @@ class Optimizer:
 
         # 2. Outerquery (T1), Subquery (T2) berechnen
         t1, t2 = self._derive_outer_and_sub_query(local_rel_nodes[0])
-        all_dependent_columns = self._find_all_dependent_columns(t1, t2)
+        all_dependent_columns = self.utils.find_all_dependent_columns(t1, t2)
 
         # 3. in die Form Dependent-join konvertieren
         dependent_join = self._convert_to_dependent_join(t1, t2)
@@ -160,7 +160,8 @@ class Optimizer:
         # Domain-node
         t1_without_parent = t1.mutate(as_root=True)
         rename = Rename(t1_without_parent, predicates_dict, parent_node=None)
-        domain = Projection(rename, predicates_dict.values())
+        transformed_values = list(map(lambda x: ColumnExpression(x), predicates_dict.values()))
+        domain = Projection(rename, transformed_values)
 
         # free variables of t2 (subquery) update to match the domain node
         updated_t2 = self._update_column_name(t2, predicates_dict)
@@ -224,65 +225,3 @@ class Optimizer:
         else:
             updated_child = self._update_column_name(updated_node.input_node, column_mapping)
             return updated_node.mutate(input_node=updated_child)
-
-    def _find_all_dependent_columns(self, base_node: RelNode, dependent_node: RelNode) -> List[ColumnReference]:
-        """
-        Finds all columns that are dependent between the given base node and dependent node.
-        """
-
-        if dependent_node == base_node:
-            return []
-
-        tables = base_node.tables()
-        dependent_columns = []
-
-        if isinstance(dependent_node, (Map, Projection, GroupBy)):
-            dependent_columns += self._extract_columns_from_simple_conditions(dependent_node, tables)
-        elif isinstance(dependent_node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
-            dependent_columns += self._extract_columns_from_composite_conditions(dependent_node, tables)
-
-        for child_node in dependent_node.children():
-            dependent_columns += self._find_all_dependent_columns(base_node, child_node)
-
-        dependent_columns = list(set(dependent_columns))
-        return dependent_columns
-
-    @staticmethod
-    def _extract_columns_from_composite_conditions(node: Selection | ThetaJoin | DependentJoin | SemiJoin | AntiJoin,
-                                                   tables: frozenset[TableReference]) -> List[ColumnReference]:
-        columns = []
-        tables_identifier = [table.identifier() for table in tables]
-
-        for column in node.predicate.itercolumns():
-            if column.table.identifier() in tables_identifier:
-                columns.append(column)
-        return columns
-
-    @staticmethod
-    def _extract_columns_from_simple_conditions(node: Map | GroupBy | Projection,
-                                                tables: frozenset[TableReference]) -> List[ColumnReference]:
-        columns = []
-        tables_identifier = [table.identifier() for table in tables]
-
-        if isinstance(node, (GroupBy, Projection)):
-            node_columns = node.group_columns if isinstance(node, GroupBy) else node.columns
-
-            for sql_expr in node_columns:
-                for column in sql_expr.itercolumns():
-                    if column.table.identifier() in tables_identifier:
-                        columns.append(column)
-
-        if isinstance(node, (GroupBy, Map)):
-            disc = node.aggregates if isinstance(node, GroupBy) else node.mapping
-            for key_set, value_set in disc.items():
-                for key_expr in key_set:
-                    for key_column in key_expr.itercolumns():
-                        if key_column.table.identifier() in tables_identifier:
-                            columns.append(key_column)
-
-                for value_expr in value_set:
-                    for value_column in value_expr.itercolumns():
-                        if value_column.table.identifier() in tables_identifier:
-                            columns.append(value_column)
-
-        return columns

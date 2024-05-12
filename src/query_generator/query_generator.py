@@ -2,10 +2,12 @@ from collections import deque
 
 from postbound.qal.relalg import RelNode, ThetaJoin, Relation, Projection, GroupBy, Selection
 
+from src.utils.utils import Utils
+
 
 class QueryGenerator:
-    def __init__(self):
-        pass
+    def __init__(self, utils: Utils):
+        self.utils = utils
 
     def generate_sql_from_relalg(self, node: RelNode) -> str:
         # annehmen, dass der linke Kindknoten im ersten Join t1 ist.
@@ -36,7 +38,7 @@ class QueryGenerator:
             queue.extend(current.children())
 
     def _generate_outer_query(self, node: RelNode) -> str:
-        inner_query = self._generate_simple_select_query(node)
+        inner_query = self._generate_simple_select_query(node, self.utils.find_all_dependent_columns)
         outer_query = f"WITH outerquery AS ({inner_query})"
 
         return outer_query
@@ -60,10 +62,6 @@ class QueryGenerator:
         relations = []
         aggregation_functions = []
         where_conditions = []
-
-        if column_generator:
-            additional_columns = column_generator(node)
-            select_part += ', '.join([str(col) for col in additional_columns])
 
         while queue:
             current = queue.popleft()
@@ -96,5 +94,9 @@ class QueryGenerator:
 
         where_part = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
         from_part += ", ".join(relations)
+
+        if column_generator:
+            additional_columns = column_generator(node, node.root())
+            select_part += ', '.join([str(col) for col in additional_columns])
         sql_query = f"{select_part} {from_part}{where_part}{groupby_part}"
         return sql_query.strip()
