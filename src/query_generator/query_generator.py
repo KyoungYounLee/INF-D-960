@@ -16,9 +16,14 @@ class QueryGenerator:
 
         # 1) "with outerquery AS (),": In diese Klammern kommt die Abfrage für t1.
         sql_outerquery = self._generate_outer_query(t1)
+
         # sidepass von t1 lesen - Hier die Spaltennamen aus dem domain extrahieren.
+        domain_columns_name = [col.name for col in next(iter(t1.sideways_pass)).mapping.keys()]
+        distinct_columns = ', '.join(domain_columns_name)
 
         # 2) dup_elim_outerquery AS (SELECT DISTINCT Spaltennamen from outerquery)
+        sql_dup_elim = f"dup_elim_outerquery AS (SELECT DISTINCT {distinct_columns} FROM outerquery)"
+
         # 3) SELECT oberste Projektion FROM outerquery oq JOIN( hier leer lassen ) AS subquery ON ( leer lassen )
         #    WHERE wenn selection unter der Projektion vorhanden ist, dann die Bedingung dort einfügen
         # 3-1) den leeren Join in 3) mit dem rechten Kindknoten des ersten Joins füllen
@@ -26,7 +31,7 @@ class QueryGenerator:
         #      Im Prädikat 'd' mit 'oq' ersetzen und den Rest mit 'subquery'.
 
         # 1, 2, 3 in einer Zeichenkette zusammenführen und zurückgeben
-        return sql_outerquery
+        return sql_outerquery, sql_dup_elim
 
     @staticmethod
     def _find_first_join_node(node: RelNode):
