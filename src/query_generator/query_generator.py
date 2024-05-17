@@ -1,5 +1,8 @@
+import re
 from collections import deque
 
+from postbound.qal import transform
+from postbound.qal.base import TableReference, ColumnReference
 from postbound.qal.relalg import RelNode, ThetaJoin, Relation, Projection, GroupBy, Selection
 
 from src.utils.utils import Utils
@@ -9,7 +12,7 @@ class QueryGenerator:
     def __init__(self, utils: Utils):
         self.utils = utils
 
-    def generate_sql_from_relalg(self, node: RelNode) -> str:
+    def generate_sql_from_relalg(self, node: RelNode):
         # annehmen, dass der linke Kindknoten im ersten Join t1 ist.
         first_join = self._find_first_join_node(node.root())
         t1 = first_join.left_input
@@ -26,12 +29,18 @@ class QueryGenerator:
 
         # 3) SELECT oberste Projektion FROM outerquery oq JOIN( hier leer lassen ) AS subquery ON ( leer lassen )
         #    WHERE wenn selection unter der Projektion vorhanden ist, dann die Bedingung dort einfügen
+        sql_main_query = self._generate_simple_select_query(node, stop_node=first_join,
+                                                            additional_relations=["outerquery oq"])
         # 3-1) den leeren Join in 3) mit dem rechten Kindknoten des ersten Joins füllen
         # 3-2) Die ON-Bedingung nach dem Join in 3) sollte das Prädikat des ersten Joins sein.
         #      Im Prädikat 'd' mit 'oq' ersetzen und den Rest mit 'subquery'.
+        sql_join_predicate = str(self._extract_join_predicate(first_join))
+        sql_main_query_with_join = self._add_join_to_query(sql_main_query, "() as subquery", sql_join_predicate)
+        sql_main_query_renamed_subquery = self._rename_subquery_columns(sql_main_query_with_join)
 
         # 1, 2, 3 in einer Zeichenkette zusammenführen und zurückgeben
-        return sql_outerquery, sql_dup_elim
+        sql_final = f"{sql_outerquery},\n{sql_dup_elim}\n{sql_main_query_renamed_subquery}"
+        return sql_final
 
     @staticmethod
     def _find_first_join_node(node: RelNode):
@@ -48,8 +57,22 @@ class QueryGenerator:
 
         return outer_query
 
-    def _generate_distinct_outer_query(self, node: RelNode) -> str:
-        return ""
+    def _extract_join_predicate(self, join_node: ThetaJoin):
+        tab_d = TableReference("domain", "d")
+        tab_oq = TableReference("outerquery", "oq")
+        tab_subquery = TableReference("subquery", "subquery")
+
+        column_mapping = {}
+
+        for column in join_node.predicate.itercolumns():
+            if column.table.identifier() == tab_d.identifier():
+                column_oq = ColumnReference(column.name, tab_oq)
+                column_mapping[column] = column_oq
+            else:
+                column_sub = ColumnReference(column.name, tab_subquery)
+                column_mapping[column] = column_sub
+
+        return transform.rename_columns_in_predicate(join_node.predicate, column_mapping)
 
     def _generate_main_query(self, node: RelNode) -> str:
         return ""
@@ -57,7 +80,8 @@ class QueryGenerator:
     def _generate_sub_query(self, node: RelNode, sql_query: str) -> str:
         return ""
 
-    def _generate_simple_select_query(self, node: RelNode, column_generator=None) -> str:
+    def _generate_simple_select_query(self, node: RelNode, column_generator=None, stop_node=None,
+                                      additional_relations: [str] = None) -> str:
         select_part = "SELECT "
         from_part = "FROM "
         where_part = ""
@@ -68,8 +92,14 @@ class QueryGenerator:
         aggregation_functions = []
         where_conditions = []
 
+        if additional_relations:
+            relations += additional_relations
+
         while queue:
             current = queue.popleft()
+
+            if current == stop_node:
+                continue
 
             if isinstance(current, Relation):
                 relations.append(current.table.full_name + " " + current.table.alias)
@@ -105,3 +135,43 @@ class QueryGenerator:
             select_part += ', '.join([str(col) for col in additional_columns])
         sql_query = f"{select_part} {from_part}{where_part}{groupby_part}"
         return sql_query.strip()
+
+    @staticmethod
+    def _add_join_to_query(base_query: str, join_clause: str, on_condition: str) -> str:
+        insert_position = base_query.upper().find("WHERE")
+        if insert_position == -1:
+            insert_position = len(base_query)
+
+        new_query = base_query[:insert_position] + f" JOIN {join_clause} ON {on_condition} " + base_query[
+                                                                                               insert_position:]
+        return new_query.strip()
+
+    @staticmethod
+    def _rename_subquery_columns(subquery: str) -> str:
+        subquery_pattern = re.compile(r"\(SELECT (.*?) FROM .*?\)", re.IGNORECASE | re.DOTALL)
+
+        def rename_columns(match):
+            columns_part = match.group(1)
+            columns = [col.strip() for col in columns_part.split(',')]
+
+            new_columns = []
+            unnamed_count = 0
+
+            for col in columns:
+                if re.match(r'^\w+\.\w+$', col.strip()):
+                    parts = col.split('.')
+                    new_columns.append(f"subquery.{parts[1]}")
+                else:
+                    unnamed_count += 1
+                    new_columns.append(f"m{unnamed_count}")
+
+            new_columns_part = ', '.join(new_columns)
+            return f"{new_columns_part}"
+
+        match = subquery_pattern.search(subquery)
+        if not match:
+            return subquery
+
+        renamed_subquery = subquery_pattern.sub(rename_columns, subquery)
+        renamed_subquery = re.sub(r'\)+$', '', renamed_subquery)
+        return renamed_subquery
