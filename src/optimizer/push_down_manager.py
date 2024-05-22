@@ -3,7 +3,7 @@ from typing import Optional, List
 
 from postbound.qal import base
 from postbound.qal.relalg import RelNode, Projection, GroupBy, Selection, ThetaJoin, SemiJoin, AntiJoin, Map, Relation, \
-    CrossProduct, Rename
+    CrossProduct
 
 from src.optimizer.dependent_join import DependentJoin
 from src.utils.utils import Utils
@@ -176,15 +176,17 @@ class PushDownManager:
                     return current
                 queue.extend(current.children())
 
-        updated_join = find_subtree_root_node(updated_parent)
+        updated_subtree_root_node = find_subtree_root_node(updated_parent)
 
-        updated_domain = Rename(updated_join.left_input,
-                                updated_parent.right_input.input_node.left_input.input_node.mapping,
-                                parent_node=updated_parent.right_input.input_node.left_input)
-        print(updated_domain.input_node)
-        print(updated_domain.input_node.parent_node)
-        print(updated_domain.input_node.sideways_pass)
-        return updated_domain
+        print(updated_parent.right_input.input_node.left_input.input_node.input_node)
+        print(updated_parent.right_input.input_node.left_input.input_node.input_node.parent_node)
+
+        result = updated_subtree_root_node.mutate(
+            left_input=updated_parent.right_input.input_node.left_input.input_node.input_node)
+        print(result)
+        print(result.parent_node)
+        print(result.sideways_pass)
+        return result
 
     def _navigate_to_dependent_join(self, node: RelNode) -> Optional[DependentJoin]:
         if isinstance(node, DependentJoin):
