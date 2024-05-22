@@ -1,4 +1,3 @@
-from collections import deque
 from typing import Optional, List
 
 from postbound.qal import base
@@ -135,21 +134,33 @@ class PushDownManager:
 
     def _apply_push_down_rule_final(self, node: RelNode, pushdown_subtree_root: ThetaJoin):
         dependent_join = node.parent_node
+        dependent_join_parent_node = dependent_join.parent_node
         left_child = dependent_join.left_input.mutate(as_root=True)
         right_child = dependent_join.right_input.mutate(as_root=True)
 
         if isinstance(node, Relation) and node.table.full_name == "DummyTable":
-            parent_node = dependent_join.parent_node
-            updated_parent_node = parent_node.mutate(left_input=left_child)
-            return self.utils.update_relalg_structure_upward(updated_parent_node)
+            updated_parent = dependent_join_parent_node.mutate(left_input=left_child)
+        else:
+            cross_product = CrossProduct(left_input=left_child, right_input=right_child)
+            if isinstance(dependent_join_parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
+                if dependent_join_parent_node.left_input == dependent_join:
+                    updated_parent = dependent_join_parent_node.mutate(left_input=cross_product)
+                else:
+                    updated_parent = dependent_join_parent_node.mutate(right_input=cross_product)
+            elif isinstance(dependent_join_parent_node, (SemiJoin, AntiJoin)):
+                if dependent_join_parent_node.input_node == dependent_join:
+                    updated_parent = dependent_join_parent_node.mutate(input_node=cross_product)
+                else:
+                    updated_parent = dependent_join_parent_node.mutate(subquery_node=cross_product)
+            else:
+                updated_parent = dependent_join_parent_node.mutate(input_node=cross_product)
 
-        cross_product = CrossProduct(left_input=left_child, right_input=right_child,
-                                     parent_node=dependent_join.parent_node)
-        return self.utils.update_relalg_structure_upward(cross_product)
+        return updated_parent
 
     def _push_down_dependent_join(self, node: RelNode, updated_node: RelNode,
                                   pushdown_subtree_root: ThetaJoin) -> RelNode:
         dependent_join_parent_node = node.parent_node.parent_node
+        print(self.utils.detailed_structure_visualization(updated_node))
 
         if isinstance(dependent_join_parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if dependent_join_parent_node.left_input == node.parent_node:
@@ -158,35 +169,13 @@ class PushDownManager:
                 updated_parent = dependent_join_parent_node.mutate(right_input=updated_node)
         elif isinstance(dependent_join_parent_node, (SemiJoin, AntiJoin)):
             if dependent_join_parent_node.input_node == node:
-                updated_parent = self.utils.update_relalg_structure_upward(
-                    dependent_join_parent_node, input_node=updated_node)
+                updated_parent = dependent_join_parent_node.mutate(input_node=updated_node)
             else:
-                updated_parent = self.utils.update_relalg_structure_upward(
-                    dependent_join_parent_node, subquery_node=updated_node)
+                updated_parent = dependent_join_parent_node.mutate(subquery_node=updated_node)
         else:
-            updated_parent = self.utils.update_relalg_structure_upward(
-                dependent_join_parent_node, input_node=updated_node)
+            updated_parent = dependent_join_parent_node.mutate(input_node=updated_node)
 
-        def find_subtree_root_node(current_node: RelNode):
-            queue = deque([current_node.root()])
-            while queue:
-                current = queue.popleft()
-                if isinstance(current,
-                              ThetaJoin) and current.left_input == pushdown_subtree_root.left_input and current.predicate == pushdown_subtree_root.predicate:
-                    return current
-                queue.extend(current.children())
-
-        updated_subtree_root_node = find_subtree_root_node(updated_parent)
-
-        print(updated_parent.right_input.input_node.left_input.input_node.input_node)
-        print(updated_parent.right_input.input_node.left_input.input_node.input_node.parent_node)
-
-        result = updated_subtree_root_node.mutate(
-            left_input=updated_parent.right_input.input_node.left_input.input_node.input_node)
-        print(result)
-        print(result.parent_node)
-        print(result.sideways_pass)
-        return result
+        return updated_parent
 
     def _navigate_to_dependent_join(self, node: RelNode) -> Optional[DependentJoin]:
         if isinstance(node, DependentJoin):
