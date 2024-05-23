@@ -97,7 +97,6 @@ class QueryGenerator:
         where_conditions = []
         agg_mapping = {}
         agg_count = 1
-        has_group_by = False
 
         dup_elim_outerquery = TableReference("dup_elim_outerquery", "d")
         relations.append(dup_elim_outerquery)
@@ -121,7 +120,6 @@ class QueryGenerator:
 
                 select_part += ', '.join(columns)
             elif isinstance(current, GroupBy):
-                has_group_by = True
                 grouping_columns = ', '.join([str(col) for col in current.group_columns])
                 if grouping_columns:
                     groupby_part = f"GROUP BY {grouping_columns}"
@@ -139,25 +137,12 @@ class QueryGenerator:
         from_part += ", ".join(
             [f"{relation.full_name} {relation.alias}" for relation in relations if relation.full_name != "DummyTable"])
 
-        # Todo: Muss geändert werden, sobald die Pushdown-Regel abgeschlossen ist
-        if domain_columns:
-            domain_columns_with_prefix = [f"d.{col}" for col in domain_columns]
-            if select_part.endswith("SELECT "):
-                select_part += ', '.join(domain_columns_with_prefix)
-            else:
-                select_part += ', ' + ', '.join(domain_columns_with_prefix)
-
-            if has_group_by:
-                if groupby_part.startswith("GROUP BY "):
-                    groupby_part += ', ' + ', '.join(domain_columns_with_prefix)
-                else:
-                    groupby_part += 'GROUP BY ' + ', '.join(domain_columns_with_prefix)
-
         sql_query = f"{select_part}\n\t{from_part}\n\t{where_part}\n\t{groupby_part}"
 
         return sql_query.strip(), agg_mapping
 
-    def _generate_simple_select_query(self, node: RelNode, *, column_generator=None, stop_node=None,
+    @staticmethod
+    def _generate_simple_select_query(node: RelNode, *, column_generator=None, stop_node=None,
                                       additional_relations: [TableReference] = None, tab_line=False) -> (str, list):
         select_part = "SELECT "
         from_part = "FROM "
