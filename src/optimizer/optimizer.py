@@ -9,13 +9,11 @@ from postbound.qal.relalg import RelNode, SubqueryScan, Projection, ThetaJoin, S
 from postbound.util.dicts import frozendict
 
 from src.optimizer.dependent_join import DependentJoin
-from src.optimizer.push_down_manager import PushDownManager
 from src.utils.utils import Utils
 
 
 class Optimizer:
-    def __init__(self, pushDownManager: PushDownManager, utils: Utils):
-        self.pushDownManager = pushDownManager
+    def __init__(self, utils: Utils):
         self.utils = utils
 
     def optimize_unnesting(self, relalg: RelNode):
@@ -42,9 +40,6 @@ class Optimizer:
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
         updated_d = relalg.input_node.mutate(input_node=d).root()
-
-        # 5. Push-Down
-        # result = self.pushDownManager.push_down(d)
 
         return t1, t2, dependent_join, updated_d
 
@@ -105,27 +100,23 @@ class Optimizer:
                 tail_node = node.right_input if node.left_input == t1 else node.left_input
                 if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
                     if node.parent_node.left_input == node:
-                        updated_t2 = self.utils.update_relalg_structure_upward(
-                            node.parent_node, left_input=tail_node)
+                        updated_t2 = node.parent_node.mutate(left_input=tail_node)
                     else:
-                        updated_t2 = self.utils.update_relalg_structure_upward(
-                            node.parent_node, right_input=tail_node)
+                        updated_t2 = node.parent_node.mutate(right_input=tail_node)
                 elif isinstance(node.parent_node, (SemiJoin, AntiJoin)):
                     if node.parent_node.input_node == node:
-                        updated_t2 = self.utils.update_relalg_structure_upward(
-                            node.parent_node, input_node=tail_node)
+                        updated_t2 = node.parent_node.mutate(input_node=tail_node)
                     else:
-                        updated_t2 = self.utils.update_relalg_structure_upward(
-                            node.parent_node, subquery_node=tail_node)
+                        updated_t2 = node.parent_node.mutate(subquery_node=tail_node)
                 else:
-                    updated_t2 = self.utils.update_relalg_structure_upward(
-                        node.parent_node, input_node=tail_node)
+                    updated_t2 = node.parent_node.mutate(input_node=tail_node)
                 return True
+
             elif t1 in children and isinstance(node, ThetaJoin):
                 if node.left_input == t1:
-                    updated_t2 = self.utils.update_relalg_structure_upward(node, left_input=dummy_rel)
+                    updated_t2 = node.mutate(left_input=dummy_rel)
                 else:
-                    updated_t2 = self.utils.update_relalg_structure_upward(node, right_input=dummy_rel)
+                    updated_t2 = node.mutate(right_input=dummy_rel)
                 return True
 
             for child in children:
@@ -137,8 +128,7 @@ class Optimizer:
         find_and_remove_t1_in_t2(t2)
 
         dependent_join = DependentJoin(t1, updated_t2.root())
-        updated_dependent_join = self.utils.update_relalg_structure_upward(dependent_join.mutate())
-        return updated_dependent_join
+        return dependent_join
 
     def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
             Optional[RelNode]:
@@ -181,7 +171,7 @@ class Optimizer:
             for sql_expr in node.columns:
                 new_columns.append(transform.rename_columns_in_expression(sql_expr, column_mapping))
 
-            updated_node = self.utils.update_relalg_structure_upward(node, targets=tuple(new_columns))
+            updated_node = node.mutate(targets=tuple(new_columns))
         elif isinstance(node, GroupBy):
             new_aggregates = {}
             new_group_columns = []
@@ -196,8 +186,8 @@ class Optimizer:
             for column in node.group_columns:
                 new_group_columns.append(transform.rename_columns_in_expression(column, column_mapping))
 
-            updated_node = self.utils.update_relalg_structure_upward(node, group_columns=tuple(new_group_columns),
-                                                                     aggregates=frozendict(new_aggregates))
+            updated_node = node.mutate(group_columns=tuple(new_group_columns),
+                                       aggregates=frozendict(new_aggregates))
         elif isinstance(node, Map):
             new_mappings = {}
             for key_set, value_set in node.mapping.items():
@@ -208,7 +198,7 @@ class Optimizer:
                     transform.rename_columns_in_expression(expr, column_mapping) for expr in value_set)
                 new_mappings[new_key_set] = new_value_set
 
-            updated_node = self.utils.update_relalg_structure_upward(node, mapping=frozendict(new_mappings))
+            updated_node = node.mutate(mapping=frozendict(new_mappings))
 
         elif isinstance(node, (Selection, ThetaJoin, DependentJoin, SemiJoin, AntiJoin)):
             new_predicate = transform.rename_columns_in_predicate(node.predicate, column_mapping)
