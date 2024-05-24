@@ -12,16 +12,13 @@ class PushDownManager:
     def __init__(self, utils: Utils):
         self.utils = utils
 
-    def push_down(self, node: RelNode, pushdown_subtree_root: Optional[ThetaJoin] = None) -> RelNode:
+    def push_down(self, node: RelNode) -> RelNode:
 
         # Navigieren zur Position des Knotens für den dependent-Join node
         dependent_join = self._navigate_to_dependent_join(node)
 
         if dependent_join is None:
             return node.root()
-
-        if pushdown_subtree_root is None:
-            pushdown_subtree_root = dependent_join.parent_node
 
         # Prüfen, ob das rechte Kind des dependent-join Knotens freie Variablen in der Baumstruktur hat
         dependent_node = dependent_join.right_input
@@ -32,10 +29,10 @@ class PushDownManager:
         #   - Anwenden eine Push-down-Regel für diesen Typ. An diesem Punkt wird die gesamte Baumstruktur aktualisiert
         #   - zurück zu Schritt 1 und wiederholen die Schleife
         if self._check_free_variables_in_node(dependent_node):
-            updated_node = self._apply_push_down_rule(dependent_node, pushdown_subtree_root)
+            updated_node = self._apply_push_down_rule(dependent_node)
         else:
-            updated_node = self._apply_push_down_rule_final(dependent_node, pushdown_subtree_root)
-        return self.push_down(updated_node, pushdown_subtree_root)
+            updated_node = self._apply_push_down_rule_final(dependent_node)
+        return self.push_down(updated_node)
 
     def _check_free_variables_in_node(self, node: RelNode) -> bool:
         if isinstance(node, Relation):
@@ -74,44 +71,44 @@ class PushDownManager:
 
         return False
 
-    def _apply_push_down_rule(self, node: RelNode, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _apply_push_down_rule(self, node: RelNode) -> RelNode:
         if isinstance(node, Selection):
-            return self._push_down_rule_selection(node, pushdown_subtree_root)
+            return self._push_down_rule_selection(node)
         elif isinstance(node, Projection):
-            return self._push_down_rule_projection(node, pushdown_subtree_root)
+            return self._push_down_rule_projection(node)
         elif isinstance(node, GroupBy):
-            return self._push_down_rule_groupby(node, pushdown_subtree_root)
+            return self._push_down_rule_groupby(node)
         elif isinstance(node, Map):
-            return self._push_down_rule_map(node, pushdown_subtree_root)
+            return self._push_down_rule_map(node)
         elif isinstance(node, ThetaJoin):
-            return self._push_down_rule_join(node, pushdown_subtree_root)
+            return self._push_down_rule_join(node)
 
         return node
 
-    def _push_down_rule_selection(self, node: Selection, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _push_down_rule_selection(self, node: Selection) -> RelNode:
         new_input_node = node.input_node.mutate(as_root=True)
         dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
-        return self._push_down_dependent_join(node, updated_node, pushdown_subtree_root)
+        return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_projection(self, node: Projection, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _push_down_rule_projection(self, node: Projection) -> RelNode:
         additional_columns = node.parent_node.left_input.columns
         updated_columns = tuple(node.columns + additional_columns)
         new_input_node = node.input_node.mutate(as_root=True)
         dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(input_node=dependent_join, targets=updated_columns, as_root=True)
 
-        return self._push_down_dependent_join(node, updated_node, pushdown_subtree_root)
+        return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_map(self, node: Map, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _push_down_rule_map(self, node: Map) -> RelNode:
         new_input_node = node.input_node.mutate(as_root=True)
         dependent_join = node.parent_node.mutate(as_root=True, right_input=new_input_node)
         updated_node = node.mutate(as_root=True, input_node=dependent_join)
 
-        return self._push_down_dependent_join(node, updated_node, pushdown_subtree_root)
+        return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_groupby(self, node: GroupBy, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _push_down_rule_groupby(self, node: GroupBy) -> RelNode:
         additional_columns = node.parent_node.left_input.columns
         updated_columns = tuple(node.group_columns + additional_columns)
         new_input_node = node.input_node.mutate(as_root=True)
@@ -120,9 +117,9 @@ class PushDownManager:
         updated_node = node.mutate(as_root=True, input_node=dependent_join,
                                    group_columns=updated_columns)
 
-        return self._push_down_dependent_join(node, updated_node, pushdown_subtree_root)
+        return self._push_down_dependent_join(node, updated_node)
 
-    def _push_down_rule_join(self, node: ThetaJoin, pushdown_subtree_root: ThetaJoin) -> RelNode:
+    def _push_down_rule_join(self, node: ThetaJoin) -> RelNode:
         if self._check_free_variables_in_node(node.right_input):
             dependent_join = node.parent_node.mutate(as_root=True, right_input=node.right_input)
             updated_node = node.mutate(as_root=True, right_input=dependent_join)
@@ -130,9 +127,10 @@ class PushDownManager:
             dependent_join = node.parent_node.mutate(as_root=True, right_input=node.left_input)
             updated_node = node.mutate(as_root=True, left_input=dependent_join)
 
-        return self._push_down_dependent_join(node, updated_node, pushdown_subtree_root)
+        return self._push_down_dependent_join(node, updated_node)
 
-    def _apply_push_down_rule_final(self, node: RelNode, pushdown_subtree_root: ThetaJoin):
+    @staticmethod
+    def _apply_push_down_rule_final(node: RelNode):
         dependent_join = node.parent_node
         dependent_join_parent_node = dependent_join.parent_node
         left_child = dependent_join.left_input.mutate(as_root=True)
@@ -157,10 +155,9 @@ class PushDownManager:
 
         return updated_parent
 
-    def _push_down_dependent_join(self, node: RelNode, updated_node: RelNode,
-                                  pushdown_subtree_root: ThetaJoin) -> RelNode:
+    @staticmethod
+    def _push_down_dependent_join(node: RelNode, updated_node: RelNode) -> RelNode:
         dependent_join_parent_node = node.parent_node.parent_node
-        print(self.utils.detailed_structure_visualization(updated_node))
 
         if isinstance(dependent_join_parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
             if dependent_join_parent_node.left_input == node.parent_node:
