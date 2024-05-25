@@ -1,7 +1,7 @@
 import re
 from collections import deque
 
-from postbound.qal import transform
+from postbound.qal import transform, clauses
 from postbound.qal.base import TableReference, ColumnReference
 from postbound.qal.relalg import RelNode, ThetaJoin, Relation, Projection, GroupBy, Selection
 
@@ -66,6 +66,8 @@ class QueryGenerator:
                                                                     column_generator=self.utils.find_all_dependent_columns,
                                                                     tab_line=True)
         outer_query = f"WITH outerquery AS (\n\t{inner_query})"
+        # outer_query_1 = clauses.WithQuery(inner_query, "outerquery")
+        # print(outer_query_1)
 
         return outer_query, relations
 
@@ -87,14 +89,12 @@ class QueryGenerator:
         return transform.rename_columns_in_predicate(join_node.predicate, column_mapping)
 
     def _generate_sub_query(self, node: RelNode, *, stop_node: RelNode = None, domain_columns=None) -> (str, list):
-        select_part = "SELECT "
-        from_part = "FROM "
-        where_part = ""
+        select_projections = []
+        where_conditions = []
         groupby_part = ""
         queue = deque([node])
 
         relations = []
-        where_conditions = []
         agg_mapping = {}
         agg_count = 1
 
@@ -105,20 +105,19 @@ class QueryGenerator:
             current = queue.popleft()
 
             if isinstance(current, Relation):
-                relations.append(current.table)
+                relations.append(clauses.DirectTableSource(current.table))
             elif isinstance(current, Projection):
                 columns = []
                 for col in current.columns:
-                    col_str = str(col)
-                    if re.search(r'\b(AVG|SUM|COUNT|MIN|MAX)\b', col_str, re.IGNORECASE):
+                    if re.search(r'\b(AVG|SUM|COUNT|MIN|MAX)\b', str(col), re.IGNORECASE):
                         alias = f"m{agg_count}"
-                        columns.append(f"{col_str} AS {alias}")
-                        agg_mapping[col_str] = alias
+                        columns.append(clauses.BaseProjection(col, alias))
+                        agg_mapping[str(col)] = alias
                         agg_count += 1
                     else:
-                        columns.append(col_str)
+                        columns.append(clauses.BaseProjection(col))
 
-                select_part += ', '.join(columns)
+                select_projections += columns
             elif isinstance(current, GroupBy):
                 grouping_columns = ', '.join([str(col) for col in current.group_columns])
                 if grouping_columns:
@@ -133,26 +132,24 @@ class QueryGenerator:
                 children_without_stop_node = [child for child in current.children() if child != stop_node]
                 queue.extend(children_without_stop_node)
 
-        where_part = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-        from_part += ", ".join(
-            [f"{relation.full_name} {relation.alias}" for relation in relations if relation.full_name != "DummyTable"])
+        where_conditions = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
-        sql_query = f"{select_part}\n\t{from_part}\n\t{where_part}\n\t{groupby_part}"
+        select_clause = clauses.Select(select_projections)
+        from_clause = clauses.From(relations)
+
+        sql_query = f"{select_clause}\n\t{from_clause}\n\t{where_conditions}\n\t{groupby_part}"
 
         return sql_query.strip(), agg_mapping
 
     @staticmethod
     def _generate_simple_select_query(node: RelNode, *, column_generator=None, stop_node=None,
                                       additional_relations: [TableReference] = None, tab_line=False) -> (str, list):
-        select_part = "SELECT "
-        from_part = "FROM "
-        where_part = ""
-        groupby_part = ""
+        select_projections = []
+        where_conditions = []
+        groupby_columns = ""
         queue = deque([node])
 
         relations = []
-        aggregation_functions = []
-        where_conditions = []
 
         if additional_relations:
             relations += additional_relations
@@ -164,42 +161,38 @@ class QueryGenerator:
                 continue
 
             if isinstance(current, Relation):
-                relations.append(current.table)
+                relations.append(clauses.DirectTableSource(current.table))
             elif isinstance(current, Projection):
-                columns = ', '.join([str(col) for col in current.columns])
-                select_part += columns
+                columns = [clauses.BaseProjection(col) for col in current.columns]
+                select_projections += columns
             elif isinstance(current, GroupBy):
                 grouping_columns = ', '.join([str(col) for col in current.group_columns])
                 if grouping_columns:
-                    groupby_part = f"GROUP BY {grouping_columns}"
+                    groupby_columns = f"GROUP BY {grouping_columns}"
 
                 for expr_set, function_set in current.aggregates.items():
-                    for expr in expr_set:
-                        for function in function_set:
-                            aggregation_functions.append(f"{function}({expr})")
+                    select_projections.append(clauses.BaseProjection(expr_set))
 
             elif isinstance(current, (ThetaJoin, Selection)):
                 where_conditions.append(str(current.predicate))
 
             queue.extend(current.children())
 
-        if aggregation_functions:
-            if select_part.endswith("SELECT "):
-                select_part += ', '.join(aggregation_functions)
-            else:
-                select_part += ', ' + ', '.join(aggregation_functions)
-
-        where_part = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-        from_part += ", ".join([f"{relation.full_name} {relation.alias}" for relation in relations])
+        where_conditions = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
         if column_generator:
             additional_columns = column_generator(node, node.root())
-            select_part += ', '.join([str(col) for col in additional_columns])
+            select_projections += [clauses.BaseProjection(col) for col in additional_columns]
+
+        select_clause = clauses.Select(select_projections)
+        from_clause = clauses.From(relations)
+        print(select_clause)
+        print(from_clause)
 
         if tab_line:
-            sql_query = f"{select_part}\n\t{from_part}\n\t{where_part}\n\t{groupby_part}"
+            sql_query = f"{select_clause}\n\t{from_clause}\n\t{where_conditions}\n\t{groupby_columns}"
         else:
-            sql_query = f"{select_part}\n{from_part}\n{where_part}\n{groupby_part}"
+            sql_query = f"{select_clause}\n{from_clause}\n{where_conditions}\n{groupby_columns}"
         return sql_query.strip(), relations
 
     @staticmethod
@@ -243,6 +236,6 @@ class QueryGenerator:
     @staticmethod
     def _rename_columns_in_main_query(sql_query: str, relations: list) -> str:
         for relation in relations:
-            pattern = re.compile(rf'\b{relation.alias}\b')
+            pattern = re.compile(rf'\b{relation.table.alias}\b')
             sql_query = pattern.sub(f"oq", sql_query)
         return sql_query
