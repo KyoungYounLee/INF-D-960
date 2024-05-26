@@ -1,7 +1,7 @@
 import re
 from collections import deque
 
-from postbound.qal import transform, clauses
+from postbound.qal import transform, clauses, predicates, qal
 from postbound.qal.base import TableReference, ColumnReference
 from postbound.qal.relalg import RelNode, ThetaJoin, Relation, Projection, GroupBy, Selection
 
@@ -21,11 +21,12 @@ class QueryGenerator:
         sql_outerquery, outerquery_relations = self._generate_outer_query(t1)
 
         # sidepass von t1 lesen - Hier die Spaltennamen aus dem domain extrahieren.
-        domain_columns_name = [col.name for col in next(iter(t1.sideways_pass)).mapping.keys()]
-        distinct_columns = ', '.join(domain_columns_name)
+        domain_columns_name = [ColumnReference(col.name) for col in next(iter(t1.sideways_pass)).mapping.keys()]
 
         # 2) dup_elim_outerquery AS (SELECT DISTINCT Spaltennamen from outerquery)
-        sql_dup_elim = f"dup_elim_outerquery AS (SELECT DISTINCT {distinct_columns} FROM outerquery)"
+        sql_dup_elim = self._generate_dup_elim_outer_query(domain_columns_name)
+        print(sql_outerquery)
+        print(sql_dup_elim)
 
         # 3) SELECT oberste Projektion FROM outerquery oq JOIN( hier leer lassen ) AS subquery ON ( leer lassen )
         #    WHERE wenn selection unter der Projektion vorhanden ist, dann die Bedingung dort einfügen
@@ -61,15 +62,23 @@ class QueryGenerator:
                 return current
             queue.extend(current.children())
 
-    def _generate_outer_query(self, node: RelNode) -> (str, list):
+    def _generate_outer_query(self, node: RelNode) -> (clauses.WithQuery, list):
         inner_query, relations = self._generate_simple_select_query(node,
-                                                                    column_generator=self.utils.find_all_dependent_columns,
-                                                                    tab_line=True)
-        outer_query = f"WITH outerquery AS (\n\t{inner_query})"
-        # outer_query_1 = clauses.WithQuery(inner_query, "outerquery")
-        # print(outer_query_1)
-
+                                                                    column_generator=self.utils.find_all_dependent_columns)
+        outer_query = clauses.WithQuery(inner_query, "outerquery")
         return outer_query, relations
+
+    @staticmethod
+    def _generate_dup_elim_outer_query(distinct_columns: [ColumnReference]) -> clauses.WithQuery:
+        outerquery = TableReference("outerquery")
+        select_clause = clauses.Select([clauses.BaseProjection(col) for col in distinct_columns],
+                                       clauses.SelectType.SelectDistinct)
+        from_clause = clauses.From([clauses.DirectTableSource(outerquery)])
+
+        sql_dup_elim = qal.SqlQuery(select_clause=select_clause, from_clause=from_clause)
+
+        outer_query = clauses.WithQuery(sql_dup_elim, "dup_elim_outerquery")
+        return outer_query
 
     def _extract_join_predicate(self, join_node: ThetaJoin):
         tab_d = TableReference("domain", "d")
@@ -91,7 +100,7 @@ class QueryGenerator:
     def _generate_sub_query(self, node: RelNode, *, stop_node: RelNode = None, domain_columns=None) -> (str, list):
         select_projections = []
         where_conditions = []
-        groupby_part = ""
+        groupby_columns = []
         queue = deque([node])
 
         relations = []
@@ -119,12 +128,10 @@ class QueryGenerator:
 
                 select_projections += columns
             elif isinstance(current, GroupBy):
-                grouping_columns = ', '.join([str(col) for col in current.group_columns])
-                if grouping_columns:
-                    groupby_part = f"GROUP BY {grouping_columns}"
+                groupby_columns.append(current.group_columns)
 
             elif isinstance(current, (ThetaJoin, Selection)):
-                where_conditions.append(str(current.predicate))
+                where_conditions.append(current.predicate)
 
             if not stop_node or stop_node not in current.children():
                 queue.extend(current.children())
@@ -132,21 +139,24 @@ class QueryGenerator:
                 children_without_stop_node = [child for child in current.children() if child != stop_node]
                 queue.extend(children_without_stop_node)
 
-        where_conditions = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-
         select_clause = clauses.Select(select_projections)
         from_clause = clauses.From(relations)
+        where_clause = clauses.Where(
+            predicates.CompoundPredicate.create_and(where_conditions)) if where_conditions else None
 
-        sql_query = f"{select_clause}\n\t{from_clause}\n\t{where_conditions}\n\t{groupby_part}"
+        flat_groupby_columns = [col for sublist in groupby_columns for col in sublist] if groupby_columns else []
+        groupby_clause = clauses.GroupBy(flat_groupby_columns) if flat_groupby_columns else None
+
+        sql_query = f"{select_clause}\n\t{from_clause}\n\t{where_clause}\n\t{groupby_clause}"
 
         return sql_query.strip(), agg_mapping
 
     @staticmethod
     def _generate_simple_select_query(node: RelNode, *, column_generator=None, stop_node=None,
-                                      additional_relations: [TableReference] = None, tab_line=False) -> (str, list):
+                                      additional_relations: [TableReference] = None) -> (qal.SqlQuery, list):
         select_projections = []
         where_conditions = []
-        groupby_columns = ""
+        groupby_columns = []
         queue = deque([node])
 
         relations = []
@@ -166,19 +176,14 @@ class QueryGenerator:
                 columns = [clauses.BaseProjection(col) for col in current.columns]
                 select_projections += columns
             elif isinstance(current, GroupBy):
-                grouping_columns = ', '.join([str(col) for col in current.group_columns])
-                if grouping_columns:
-                    groupby_columns = f"GROUP BY {grouping_columns}"
+                groupby_columns.append(current.group_columns)
 
                 for expr_set, function_set in current.aggregates.items():
                     select_projections.append(clauses.BaseProjection(expr_set))
 
             elif isinstance(current, (ThetaJoin, Selection)):
-                where_conditions.append(str(current.predicate))
-
+                where_conditions.append(current.predicate)
             queue.extend(current.children())
-
-        where_conditions = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
         if column_generator:
             additional_columns = column_generator(node, node.root())
@@ -186,14 +191,17 @@ class QueryGenerator:
 
         select_clause = clauses.Select(select_projections)
         from_clause = clauses.From(relations)
-        print(select_clause)
-        print(from_clause)
+        where_clause = clauses.Where(
+            predicates.CompoundPredicate.create_and(where_conditions)) if where_conditions else None
 
-        if tab_line:
-            sql_query = f"{select_clause}\n\t{from_clause}\n\t{where_conditions}\n\t{groupby_columns}"
-        else:
-            sql_query = f"{select_clause}\n{from_clause}\n{where_conditions}\n{groupby_columns}"
-        return sql_query.strip(), relations
+        flat_groupby_columns = [col for sublist in groupby_columns for col in sublist] if groupby_columns else []
+        groupby_clause = clauses.GroupBy(flat_groupby_columns) if flat_groupby_columns else None
+
+        sql_query = qal.SqlQuery(select_clause=select_clause, from_clause=from_clause, where_clause=where_clause,
+                                 groupby_clause=groupby_clause)
+
+        print(sql_query)
+        return sql_query, relations
 
     @staticmethod
     def _add_join_to_query(base_query: str, join_clause: str, on_condition: str) -> str:
