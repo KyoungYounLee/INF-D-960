@@ -1,3 +1,4 @@
+from collections import deque
 from typing import List, Tuple, Optional, Dict
 
 from postbound.qal import transform
@@ -39,9 +40,9 @@ class Optimizer:
 
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
-        updated_d = relalg.input_node.mutate(input_node=d).root()
+        updated_d = self._update_root_node(d, relalg.root())
 
-        return t1, t2, dependent_join, updated_d
+        return t1, t2, dependent_join, updated_d.root()
 
     @staticmethod
     def _find_dependent_subquery_node(relalg: RelNode) -> List[SubqueryScan]:
@@ -116,7 +117,8 @@ class Optimizer:
                 if node.left_input == t1:
                     updated_t2 = node.mutate(left_input=dummy_rel)
                 else:
-                    updated_t2 = node.mutate(right_input=dummy_rel)
+                    new_right_input = node.left_input.mutate(as_root=True)
+                    updated_t2 = node.mutate(left_input=dummy_rel, right_input=new_right_input)
                 return True
 
             for child in children:
@@ -215,3 +217,16 @@ class Optimizer:
         else:
             updated_child = self._update_column_name(updated_node.input_node, column_mapping)
             return updated_node.mutate(input_node=updated_child)
+
+    @staticmethod
+    def _update_root_node(node: RelNode, root_node: RelNode) -> RelNode:
+        queue = deque(root_node.children())
+
+        while queue:
+            current = queue.popleft()
+            if isinstance(current, SubqueryScan):
+                return current.parent_node.parent_node.mutate(input_node=node)
+
+            queue.extend(current.children())
+
+        return node
