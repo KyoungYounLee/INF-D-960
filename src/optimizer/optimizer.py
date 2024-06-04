@@ -40,9 +40,9 @@ class Optimizer:
 
         # 4. D berechnen
         d = self._derive_domain_node(dependent_join, all_dependent_columns)
-        updated_d = self._update_root_node(d, relalg.root())
+        result = self._update_root_node(d, relalg.root())
 
-        return t1, t2, dependent_join, updated_d.root()
+        return result.root()
 
     @staticmethod
     def _find_dependent_subquery_node(relalg: RelNode) -> List[SubqueryScan]:

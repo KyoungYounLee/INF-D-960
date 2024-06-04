@@ -14,9 +14,8 @@ class QueryGenerator:
     def __init__(self, utils: Utils):
         self.utils = utils
 
-    def generate_sql_from_relalg(self, node: RelNode):
-        # annehmen, dass der linke Kindknoten im ersten Join t1 ist.
-        first_join = self._find_first_join_node(node.root())
+    def generate_sql_from_relalg(self, node: RelNode, subquery_root_node: RelNode):
+        first_join = self._find_first_join_node(node.root(), subquery_root_node)
         t1 = first_join.left_input
 
         # 1) "with outerquery AS (),": In diese Klammern kommt die Abfrage für t1.
@@ -35,6 +34,7 @@ class QueryGenerator:
         sql_main_query, _ = self._generate_simple_select_query(node, stop_node=first_join,
                                                                additional_relations=[
                                                                    TableReference("outerquery", "oq")])
+
         sql_main_query_renamed = self._rename_columns_in_main_query(sql_main_query, outerquery_relations)
         # 3-1) den leeren Join in 3) mit dem rechten Kindknoten des ersten Joins füllen
         sql_sub_query, agg_mapping = self._generate_sub_query(first_join.right_input,
@@ -54,11 +54,11 @@ class QueryGenerator:
                             groupby_clause=sql_main_query_renamed_subquery.groupby_clause)
 
     @staticmethod
-    def _find_first_join_node(node: RelNode):
+    def _find_first_join_node(node: RelNode, subquery_root_node: RelNode):
         queue = deque([node])
         while queue:
             current = queue.popleft()
-            if isinstance(current, ThetaJoin):
+            if str(current) == str(subquery_root_node):
                 return current
             queue.extend(current.children())
 
@@ -180,9 +180,6 @@ class QueryGenerator:
                 select_projections += columns
             elif isinstance(current, GroupBy):
                 groupby_columns.append(current.group_columns)
-
-                for expr_set, function_set in current.aggregates.items():
-                    select_projections.append(clauses.BaseProjection(expr_set))
 
             elif isinstance(current, (ThetaJoin, Selection)):
                 where_conditions.append(current.predicate)

@@ -12,13 +12,13 @@ class PushDownManager:
     def __init__(self, utils: Utils):
         self.utils = utils
 
-    def push_down(self, node: RelNode) -> RelNode:
+    def push_down(self, node: RelNode, subquery_root: RelNode = None):
 
         # Navigieren zur Position des Knotens für den dependent-Join node
         dependent_join = self._navigate_to_dependent_join(node)
 
         if dependent_join is None:
-            return node.root()
+            return node.root(), subquery_root
 
         # Prüfen, ob das rechte Kind des dependent-join Knotens freie Variablen in der Baumstruktur hat
         dependent_node = dependent_join.right_input
@@ -32,7 +32,11 @@ class PushDownManager:
             updated_node = self._apply_push_down_rule(dependent_node)
         else:
             updated_node = self._apply_push_down_rule_final(dependent_node)
-        return self.push_down(updated_node)
+
+        if subquery_root is None:
+            subquery_root = updated_node
+
+        return self.push_down(updated_node, subquery_root=subquery_root)
 
     def _check_free_variables_in_node(self, node: RelNode) -> bool:
         if isinstance(node, Relation):
