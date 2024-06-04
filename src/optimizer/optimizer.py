@@ -82,54 +82,66 @@ class Optimizer:
 
         return t1, t2
 
-    def _convert_to_dependent_join(self, t1: RelNode, t2: RelNode) -> Optional[DependentJoin]:
+    def _convert_to_dependent_join(self, left_node: RelNode, right_node: RelNode) -> Optional[DependentJoin]:
 
         updated_t2 = None
         tab = TableReference("DummyTable", "DummyTable")
         col = ColumnReference("dummy", tab)
         dummy_rel = Relation(tab, [col])
 
-        def find_and_remove_t1_in_t2(node: RelNode):
+        def find_and_remove_t1_in_t2(t1: RelNode, t2: RelNode):
             nonlocal updated_t2
-            if isinstance(node, Relation):
+            if isinstance(t2, Relation):
                 return False
-            children = node.children()
-            if len(node.children()) == 0:
+            children = t2.children()
+            if len(t2.children()) == 0:
                 return False
 
-            if t1 in children and isinstance(node, CrossProduct):
-                tail_node = node.right_input if node.left_input == t1 else node.left_input
-                if isinstance(node.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
-                    if node.parent_node.left_input == node:
-                        updated_t2 = node.parent_node.mutate(left_input=tail_node)
+            if t1 in children and isinstance(t2, CrossProduct):
+                tail_node = t2.right_input if t2.left_input == t1 else t2.left_input
+                if isinstance(t2.parent_node, (ThetaJoin, CrossProduct, DependentJoin)):
+                    if t2.parent_node.left_input == t2:
+                        updated_t2 = t2.parent_node.mutate(left_input=tail_node)
                     else:
-                        updated_t2 = node.parent_node.mutate(right_input=tail_node)
-                elif isinstance(node.parent_node, (SemiJoin, AntiJoin)):
-                    if node.parent_node.input_node == node:
-                        updated_t2 = node.parent_node.mutate(input_node=tail_node)
+                        updated_t2 = t2.parent_node.mutate(right_input=tail_node)
+                elif isinstance(t2.parent_node, (SemiJoin, AntiJoin)):
+                    if t2.parent_node.input_node == t2:
+                        updated_t2 = t2.parent_node.mutate(input_node=tail_node)
                     else:
-                        updated_t2 = node.parent_node.mutate(subquery_node=tail_node)
+                        updated_t2 = t2.parent_node.mutate(subquery_node=tail_node)
                 else:
-                    updated_t2 = node.parent_node.mutate(input_node=tail_node)
+                    updated_t2 = t2.parent_node.mutate(input_node=tail_node)
                 return True
 
-            elif t1 in children and isinstance(node, ThetaJoin):
-                if node.left_input == t1:
-                    updated_t2 = node.mutate(left_input=dummy_rel)
+            elif t1 in children and isinstance(t2, ThetaJoin):
+                if t2.left_input == t1:
+                    updated_t2 = t2.mutate(left_input=dummy_rel)
                 else:
-                    new_right_input = node.left_input.mutate(as_root=True)
-                    updated_t2 = node.mutate(left_input=dummy_rel, right_input=new_right_input)
+                    new_right_input = t2.left_input.mutate(as_root=True)
+                    updated_t2 = t2.mutate(left_input=dummy_rel, right_input=new_right_input)
                 return True
 
             for child in children:
-                if find_and_remove_t1_in_t2(child):
+                if find_and_remove_t1_in_t2(t1, child):
                     return True
 
             return False
 
-        find_and_remove_t1_in_t2(t2)
+        def recursive_find_and_remove(t1: RelNode, t2: RelNode) -> bool:
+            if find_and_remove_t1_in_t2(t1, t2):
+                return True
+            if updated_t2 is None:
+                for child in t1.children():
+                    if recursive_find_and_remove(child, t2):
+                        return True
+            return False
 
-        dependent_join = DependentJoin(t1, updated_t2.root())
+        recursive_find_and_remove(left_node, right_node)
+
+        if updated_t2 is None:
+            return None
+
+        dependent_join = DependentJoin(left_node, updated_t2.root())
         return dependent_join
 
     def _derive_domain_node(self, dependent_join: DependentJoin, all_dependent_columns: List[ColumnReference]) -> \
