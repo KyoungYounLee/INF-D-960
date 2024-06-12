@@ -67,7 +67,7 @@ def main():
         relalg_query = parser.parse_relalg(query)
         postgres_interface.prewarm_tables(relalg_query.tables())
         original_result, original_execution_time = execute_query_and_measure_time(postgres_interface, query)
-        print(f"Query {query_name}: ")
+        print(f"Query {query_name}: {original_result}")
         print(f"Original: " + str(original_execution_time))
 
         optimized_query = optimize_subquery(relalg_query)
