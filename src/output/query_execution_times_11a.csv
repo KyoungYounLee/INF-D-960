@@ -1,0 +1,6 @@
+Query Name,Original Execution Time,Optimized Execution Time,Query Result,Error
+11a_4.sql,141.83259510993958,130.105562210083,"('Filmlance International AB', 'follows', 'Hämndens pris')",
+11a_5.sql,108.2705819606781,117.13501811027527,"(None, None, None)",
+11a_1.sql,102.06522297859192,116.68434715270996,"('Churchill Films', 'follows', 'Der Serienkiller - Klinge des Todes')",
+11a_2.sql,92.56900572776794,110.37845993041992,"('Churchill Films', 'followed by', 'Mannen med ikonerna')",
+11a_3.sql,99.04753375053406,232.787043094635,"('Churchill Films', 'followed by', 'Der Serienkiller - Klinge des Todes')",

@@ -79,19 +79,21 @@ def main():
             print(f"Optimized: " + str(optimized_execution_time))
 
             if convert_to_strings(original_result) == convert_to_strings(optimized_result):
-                results.append((query_name, original_execution_time, optimized_execution_time, None))
+                results.append((query_name, original_execution_time, optimized_execution_time, original_result, None))
             else:
                 print(f"Results: " + str(original_result) + " ," + str(optimized_result))
                 error_message = "Optimized results differ from original results"
-                results.append((query_name, original_execution_time, None, error_message))
+                results.append((query_name, original_execution_time, None, original_result, error_message))
 
         except Exception as e:
             error_message = str(e)
             print(f"Error: {error_message}")
-            results.append((query_name, original_execution_time, None, error_message))
+            results.append((query_name, original_execution_time, None, original_result, error_message))
             continue
 
-    df = pd.DataFrame(results, columns=["Query Name", "Original Execution Time", "Optimized Execution Time", "Error"])
+    df = pd.DataFrame(results,
+                      columns=["Query Name", "Original Execution Time", "Optimized Execution Time", "Query Result",
+                               "Error"])
     df.to_csv("output/query_execution_times.csv", index=False)
 
     return postgres_db
