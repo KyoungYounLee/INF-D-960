@@ -1,4 +1,9 @@
+import argparse
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
+
 import time
 from typing import List, Tuple, Any
 
@@ -52,52 +57,86 @@ def convert_to_strings(data):
         return str(data)
 
 
-def main():
+def main(mode, sql_directory):
     connect_string = f"postgresql://postgres:1234@localhost:5432/kp"
-    sql_directory = 'benchmark_queries'
     parser = Parser()
     results = []
 
     # Setup
-    postgres_db = postgres.connect(connect_string=connect_string, cache_enabled=False)
+    pg_instance = postgres.connect(connect_string=connect_string, cache_enabled=False)
     postgres_interface = postgres.PostgresInterface(connect_string=connect_string)
     queries = load_sql_files(sql_directory)
 
-    for query_name, query in queries:
-        relalg_query = parser.parse_relalg(query)
-        postgres_interface.prewarm_tables(relalg_query.tables())
-        original_result, original_execution_time = execute_query_and_measure_time(postgres_interface, query)
-        print(f"Query {query_name}: {original_result}")
-        print(f"Original: " + str(original_execution_time))
+    if mode == 'normal':
+        for query_name, query in queries:
+            relalg_query = parser.parse_relalg(query)
+            postgres_interface.prewarm_tables(relalg_query.tables())
+            original_result, original_execution_time = execute_query_and_measure_time(postgres_interface, query)
+            print(f"Query {query_name}: {original_result}")
+            print(f"Original: " + str(original_execution_time))
 
-        optimized_query = optimize_subquery(relalg_query)
-        postgres_interface.prewarm_tables(relalg_query.tables())
+            optimized_query = optimize_subquery(relalg_query)
+            postgres_interface.prewarm_tables(relalg_query.tables())
 
-        try:
-            optimized_result, optimized_execution_time = execute_query_and_measure_time(postgres_interface,
-                                                                                        str(optimized_query))
-            print(f"Optimized: " + str(optimized_execution_time))
+            try:
+                optimized_result, optimized_execution_time = execute_query_and_measure_time(postgres_interface,
+                                                                                            str(optimized_query))
+                print(f"Optimized: " + str(optimized_execution_time))
 
-            if convert_to_strings(original_result) == convert_to_strings(optimized_result):
-                results.append((query_name, original_execution_time, optimized_execution_time, original_result, None))
-            else:
-                print(f"Results: " + str(original_result) + " ," + str(optimized_result))
-                error_message = "Optimized results differ from original results"
+                if convert_to_strings(original_result) == convert_to_strings(optimized_result):
+                    results.append(
+                        (query_name, original_execution_time, optimized_execution_time, original_result, None))
+                else:
+                    print(f"Results: " + str(original_result) + " ," + str(optimized_result))
+                    error_message = "Optimized results differ from original results"
+                    results.append((query_name, original_execution_time, None, original_result, error_message))
+
+            except Exception as e:
+                error_message = str(e)
+                print(f"Error: {error_message}")
                 results.append((query_name, original_execution_time, None, original_result, error_message))
+                continue
 
-        except Exception as e:
-            error_message = str(e)
-            print(f"Error: {error_message}")
-            results.append((query_name, original_execution_time, None, original_result, error_message))
-            continue
+        df = pd.DataFrame(results,
+                          columns=["Query Name", "Original Execution Time", "Optimized Execution Time", "Query Result",
+                                   "Error"])
+        df.to_csv("output/query_execution_times.csv", index=False)
 
-    df = pd.DataFrame(results,
-                      columns=["Query Name", "Original Execution Time", "Optimized Execution Time", "Query Result",
-                               "Error"])
-    df.to_csv("output/query_execution_times.csv", index=False)
+    else:
+        log_output = []
 
-    return postgres_db
+        for query_name, query in queries:
+            relalg_query = parser.parse_relalg(query)
+
+            postgres_interface.prewarm_tables(relalg_query.tables())
+            # plan = pg_instance.optimizer().analyze_plan(query)
+            plan = pg_instance.optimizer().query_plan(query)
+            print(f"original query {query_name}: ")
+            print(plan.inspect())
+            log_output.append(f"original query {query_name}: ")
+            log_output.append(plan.inspect())
+
+            print(query_name)
+            optimized_query = optimize_subquery(relalg_query)
+            postgres_interface.prewarm_tables(relalg_query.tables())
+            optimized_plan = pg_instance.optimizer().analyze_plan(optimized_query)
+            print(f"optimized query {query_name}: ")
+            print(optimized_plan.inspect())
+            log_output.append(f"optimized query {query_name}: ")
+            log_output.append(optimized_plan.inspect())
+
+        with open("output/query_analysis_logs.txt", "w") as log_file:
+            log_file.write("\n".join(log_output))
+
+    return pg_instance
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Process some queries.')
+    parser.add_argument('--mode', type=str, choices=['normal', 'analysis'], default='normal',
+                        help='Mode to run the script in. Can be "normal" or "analysis".')
+
+    parser.add_argument('--sql_directory', type=str, default='benchmark_queries')
+
+    args = parser.parse_args()
+    main(args.mode, args.sql_directory)

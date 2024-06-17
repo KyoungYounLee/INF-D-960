@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import re
 from collections import deque
 
@@ -6,7 +11,6 @@ from postbound.qal.base import TableReference, ColumnReference
 from postbound.qal.expressions import SubqueryExpression, MathematicalExpression, FunctionExpression, SqlExpression
 from postbound.qal.predicates import AbstractPredicate
 from postbound.qal.relalg import RelNode, ThetaJoin, Relation, Projection, GroupBy, Selection
-
 from src.utils.utils import Utils
 
 
