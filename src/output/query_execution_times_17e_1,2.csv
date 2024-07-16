@@ -1,0 +1,3 @@
+Query Name,Original Execution Time,Optimized Execution Time,Query Result,Error
+17e_1.sql,1941.266084909439,35.19535779953003,"$hort, Too",
+17e_2.sql,2828.8668649196625,37.916025161743164,"$hort, Too",
