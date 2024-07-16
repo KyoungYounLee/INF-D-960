@@ -51,7 +51,8 @@ WHERE ci.note IN ('(writer)',
   AND it2.id = mi_idx.info_type_id
   AND k.id = mk.keyword_id
   AND cn.id = mc.company_id
-  AND t.production_year < (SELECT MAX(at_sub.production_year)
-                           FROM aka_title AS at_sub
-                           WHERE at_sub.production_year > t.production_year
-                             AND at_sub.note LIKE '%UK%');
+  AND t.episode_nr <=
+      (SELECT MAX(t_sub.episode_nr)
+       FROM title AS t_sub
+       WHERE t_sub.season_nr <= t.season_nr
+         AND t_sub.title LIKE 'A%')
