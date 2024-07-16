@@ -63,7 +63,6 @@ def main(mode, sql_directory):
     results = []
 
     # Setup
-    pg_instance = postgres.connect(connect_string=connect_string, cache_enabled=False)
     postgres_interface = postgres.PostgresInterface(connect_string=connect_string)
     queries = load_sql_files(sql_directory)
 
@@ -109,8 +108,8 @@ def main(mode, sql_directory):
             relalg_query = parser.parse_relalg(query)
 
             postgres_interface.prewarm_tables(relalg_query.tables())
-            # plan = pg_instance.optimizer().analyze_plan(query)
-            plan = pg_instance.optimizer().query_plan(query)
+            sql_query = parser.parser_query(query)
+            plan = postgres_interface.optimizer().analyze_plan(sql_query)
             print(f"original query {query_name}: ")
             print(plan.inspect())
             log_output.append(f"original query {query_name}: ")
@@ -119,7 +118,7 @@ def main(mode, sql_directory):
             print(query_name)
             optimized_query = optimize_subquery(relalg_query)
             postgres_interface.prewarm_tables(relalg_query.tables())
-            optimized_plan = pg_instance.optimizer().analyze_plan(optimized_query)
+            optimized_plan = postgres_interface.optimizer().analyze_plan(optimized_query)
             print(f"optimized query {query_name}: ")
             print(optimized_plan.inspect())
             log_output.append(f"optimized query {query_name}: ")
@@ -128,7 +127,7 @@ def main(mode, sql_directory):
         with open("output/query_analysis_logs.txt", "w") as log_file:
             log_file.write("\n".join(log_output))
 
-    return pg_instance
+    return postgres_interface
 
 
 if __name__ == "__main__":
