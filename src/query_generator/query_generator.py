@@ -19,8 +19,8 @@ class QueryGenerator:
         self.utils = utils
 
     def generate_sql_from_relalg(self, node: RelNode, subquery_root_node: RelNode):
-        first_join = self._find_first_join_node(node.root(), subquery_root_node)
-        t1 = first_join.left_input
+        subquery_root = self._find_subquery_root_node(node.root(), subquery_root_node)
+        t1 = subquery_root.left_input
 
         # 1) "with outerquery AS (),": In diese Klammern kommt die Abfrage für t1.
         sql_outerquery, outerquery_relations = self._generate_outer_query(t1)
@@ -35,19 +35,19 @@ class QueryGenerator:
 
         # 3) SELECT oberste Projektion FROM outerquery oq JOIN( hier leer lassen ) AS subquery ON ( leer lassen )
         #    WHERE wenn selection unter der Projektion vorhanden ist, dann die Bedingung dort einfügen
-        sql_main_query, _ = self._generate_simple_select_query(node, stop_node=first_join,
+        sql_main_query, _ = self._generate_simple_select_query(node, stop_node=subquery_root,
                                                                additional_relations=[
                                                                    TableReference("outerquery", "oq")])
 
         sql_main_query_renamed = self._rename_columns_in_main_query(sql_main_query, outerquery_relations)
         # 3-1) den leeren Join in 3) mit dem rechten Kindknoten des ersten Joins füllen
-        sql_sub_query, agg_mapping = self._generate_sub_query(first_join.right_input,
+        sql_sub_query, agg_mapping = self._generate_sub_query(subquery_root.right_input,
                                                               stop_node=next(iter(
-                                                                  first_join.left_input.sideways_pass)).parent_node)
+                                                                  subquery_root.left_input.sideways_pass)).parent_node)
 
         # 3-2) Die ON-Bedingung nach dem Join in 3) sollte das Prädikat des ersten Joins sein.
         #      Im Prädikat 'd' mit 'oq' ersetzen und den Rest mit 'subquery'.
-        sql_join_predicate = self._extract_join_predicate(first_join)
+        sql_join_predicate = self._extract_join_predicate(subquery_root)
         sql_main_query_with_join = self._add_join_to_query(sql_main_query_renamed, sql_sub_query, sql_join_predicate)
         sql_main_query_renamed_subquery = self._rename_subquery(sql_main_query_with_join, agg_mapping)
 
@@ -58,7 +58,7 @@ class QueryGenerator:
                             groupby_clause=sql_main_query_renamed_subquery.groupby_clause)
 
     @staticmethod
-    def _find_first_join_node(node: RelNode, subquery_root_node: RelNode):
+    def _find_subquery_root_node(node: RelNode, subquery_root_node: RelNode):
         queue = deque([node])
         while queue:
             current = queue.popleft()
