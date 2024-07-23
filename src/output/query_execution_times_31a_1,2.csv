@@ -1,0 +1,3 @@
+Query Name,Original Execution Time,Optimized Execution Time,Query Result,Error
+31a_1.sql,472.6478850841522,582.6898510456085,"(None, None, None, None)",
+31a_2.sql,375.1254370212555,14.87160587310791,"(None, None, None, None)",
