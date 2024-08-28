@@ -120,6 +120,7 @@ def main(mode, sql_directory):
             postgres_interface.prewarm_tables(relalg_query.tables())
             optimized_plan = postgres_interface.optimizer().analyze_plan(optimized_query)
             print(f"optimized query {query_name}: ")
+            print(optimized_query)
             print(optimized_plan.inspect())
             log_output.append(f"optimized query {query_name}: ")
             log_output.append(optimized_plan.inspect())
@@ -132,7 +133,7 @@ def main(mode, sql_directory):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process some queries.')
-    parser.add_argument('--mode', type=str, choices=['normal', 'analysis'], default='normal',
+    parser.add_argument('--mode', type=str, choices=['normal', 'analysis'], default='analysis',
                         help='Mode to run the script in. Can be "normal" or "analysis".')
 
     parser.add_argument('--sql_directory', type=str, default='benchmark_queries')

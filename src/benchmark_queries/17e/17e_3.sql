@@ -18,7 +18,7 @@ WHERE cn.country_code = '[us]'
   AND ci.movie_id = mk.movie_id
   AND mc.movie_id = mk.movie_id
   AND cn.name_pcode_nf =
-      (SELECT MAX(cn_sub.name_pcode_nf)
-       FROM company_name AS cn_sub
-       WHERE cn_sub.country_code != cn.country_code
-         AND cn_sub.name_pcode_nf LIKE 'A%');
+      (SELECT MAX(n_sub.name_pcode_nf)
+       FROM name AS n_sub
+       WHERE n_sub.gender != n.gender
+         AND n_sub.name_pcode_nf LIKE 'A%');
